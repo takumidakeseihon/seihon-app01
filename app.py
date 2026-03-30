@@ -90,6 +90,22 @@ SAPPORO_MEMBERS = [
 WORKER_TO_LOCATION = {name: "旭川" for name in ASAHIKAWA_MEMBERS}
 WORKER_TO_LOCATION.update({name: "札幌" for name in SAPPORO_MEMBERS})
 
+# --- 従業員IDマッピング（URL文字化け対策） ---
+WORKER_ID_MAP = {
+    "赤松 浩明": "A01", "浅野 央詞": "A02", "小松 宣彦": "A03", "小山 輝義": "A04",
+    "佐々木 善直": "A05", "藤井 康彰": "A06", "荒田 朋子": "A07", "川井 千代宝": "A08",
+    "木原 裕治": "A09", "蟹谷 和豊": "A10", "高橋 誠": "A11", "大文字 俊幸": "A12",
+    "青塚 知代": "A13", "早川 健太": "A14", "石井 美津枝": "A15", "山下 泉": "A16",
+    "小島 広勝": "A17", "菅原 加奈": "A18", "神馬 妃那": "A19",
+    "ディアン ファトクローマン": "A20", "インドラ アデ カマルディン": "A21",
+    "ムハマド ユヌス": "A22", "岳　匠": "A23", "立川　悠依": "A24",
+    "家常 貴史": "S01", "藤田 祐司": "S02", "田中 二郎": "S03", "内田 進": "S04",
+    "若杉 瑞樹": "S05", "小柄 浩二": "S06", "蓬畑 皓一": "S07", "藤井 翔太": "S08",
+    "佐々木 輝": "S09", "ノヴィ アナ": "S10", "カロマー ユニシャ": "S11",
+    "モニカ ジュリヤニ": "S12", "岳 司郎": "S13"
+}
+ID_TO_WORKER = {v: k for k, v in WORKER_ID_MAP.items()}
+
 # --- データ読み込み・認証関数（★自動化URL＆手動アップロード対応版） ---
 @st.cache_data(ttl=3600)
 def load_csv_data(file_path):
@@ -559,9 +575,8 @@ def show_bookmark_page(user_name):
         "確実にログイン状態を保存するために、**必ず以下の「青いボタン（専用リンク）」を一度タップ**してください。"
     )
     
-    import urllib.parse
-    safe_name = urllib.parse.quote(user_name)
-    link_url = f"?user={safe_name}"
+    user_id = WORKER_ID_MAP.get(user_name, "")
+    link_url = f"?uid={user_id}"
     
     st.markdown(f"""
         <a href="{link_url}" target="_self" style="display: block; text-align: center; background-color: #3b82f6; color: white; padding: 15px; text-decoration: none; border-radius: 10px; font-weight: bold; font-size: 18px; margin-bottom: 20px;">
@@ -1346,27 +1361,21 @@ db = init_firebase()
 if not db:
     st.stop()
 
-import urllib.parse
-
 params = st.query_params.to_dict()
-url_user = params.get("user")
+url_uid = params.get("uid")
 
 if 'logged_in_user' not in st.session_state:
-    if url_user:
-        # URLの文字化け（エンコード）を解除し、スペースの揺れを無くして確実にマッチさせる
-        clean_url_user = urllib.parse.unquote(url_user).replace(" ", "").replace("　", "").replace("+", "")
-        for name in WORKER_NAMES:
-            if name.replace(" ", "").replace("　", "") == clean_url_user:
-                st.session_state.logged_in_user = name
-                st.session_state.user_location = WORKER_TO_LOCATION.get(name, "すべて")
-                break
+    if url_uid and url_uid in ID_TO_WORKER:
+        user_name = ID_TO_WORKER[url_uid]
+        st.session_state.logged_in_user = user_name
+        st.session_state.user_location = WORKER_TO_LOCATION.get(user_name, "すべて")
 
 if 'logged_in_user' in st.session_state:
     if st.session_state.get("just_logged_in"):
-        st.query_params.user = st.session_state.logged_in_user
+        st.query_params.uid = WORKER_ID_MAP.get(st.session_state.logged_in_user, "")
         show_bookmark_page(st.session_state.logged_in_user)
     else:
-        st.query_params.user = st.session_state.logged_in_user
+        st.query_params.uid = WORKER_ID_MAP.get(st.session_state.logged_in_user, "")
         main_app()
 else:
     login_screen()
