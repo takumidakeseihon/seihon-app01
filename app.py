@@ -635,7 +635,6 @@ def show_daily_report():
         date_weight = "bold" if d == today else "normal"
         date_color = "#333" if d == today else "#666"
             
-        # ★ エラー解決の要：HTMLの左側の空白（インデント）を完全に無くして書いています
         block = f'''<div style="flex: 1; text-align: center; font-size: clamp(0.6rem, 2.5vw, 0.85rem);">
 <div style="color: {date_color}; font-weight: {date_weight}; margin-bottom: 4px; line-height: 1.2;">{disp_date}<br>({day_label})</div>
 <div style="background-color: {bg_color}; color: {text_color}; padding: 4px 0; border-radius: 6px; border: 1px solid {border_color}; font-weight: bold; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;" title="{status_text}">{status_text}</div>
@@ -703,7 +702,6 @@ def show_daily_report():
             today_tasks = today_df[involved_mask].sort_values('作成日時_dt')
             other_tasks = today_df[~involved_mask].sort_values('作成日時_dt')
 
-    # ▼▼▼ スマホで1行にするための修正（追加反映） ▼▼▼
     st.markdown(f"<h3 style='font-size: clamp(1rem, 4vw, 1.4rem); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;' title='📋 {target_date.strftime('%m月%d日')} のあなたの作業履歴'>📋 {target_date.strftime('%m月%d日')} のあなたの作業履歴</h3>", unsafe_allow_html=True)
     
     if today_tasks.empty:
@@ -784,9 +782,7 @@ def show_daily_report():
                         st.error(f"追加中にエラーが発生しました: {e}")
         
         st.divider()
-        # ▼▼▼ 変更箇所：手入力欄の見出しを前半のスタイルに統一 ▼▼▼
         st.markdown("<h4 style='font-size: clamp(0.9rem, 3.5vw, 1.2rem); margin-bottom: 0.5rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;'>✍️ 上のリストにも作業が見つからない場合</h4>", unsafe_allow_html=True)
-        # ▲▲▲ 変更ここまで ▲▲▲
         missing_work_val = submitted_report.get('漏れている作業', '') if is_target_submitted else ""
         missing_work = st.text_area(
             "機長がまだ入力していない作業などは、こちらに直接メモしてください", 
@@ -798,11 +794,9 @@ def show_daily_report():
     st.divider()
     
     with st.form("daily_report_form"):
-        # ▼▼▼ スマホで1行にしつつ、残業申請用の選択肢にする修正（追加反映） ▼▼▼
         st.markdown("<h3 style='font-size: clamp(1rem, 4vw, 1.4rem); margin-bottom: 0.5rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;' title='⏰ 退勤時間の記録（残業申請）'>⏰ 退勤時間の記録（残業申請）</h3>", unsafe_allow_html=True)
         st.info("定時の17:30を超えて作業する場合（残業した場合）に退勤時間を選択してください。")
         
-        # 17:45から15分単位の選択肢を生成
         time_options = ["残業なし（定時退社）"] + [f"{h:02d}:{m:02d}" for h in range(17, 24) for m in (0, 15, 30, 45) if (h == 17 and m >= 45) or h > 17]
         
         default_time_str = "残業なし（定時退社）"
@@ -820,9 +814,7 @@ def show_daily_report():
         leave_time_str = st.selectbox("退勤時間", time_options, index=default_index)
         
         st.divider()
-        # ▼▼▼ 変更箇所：報告事項の見出しを前半のスタイルに統一 ▼▼▼
         st.markdown("<h3 style='font-size: clamp(1rem, 4vw, 1.4rem); margin-bottom: 0.5rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;' title='💡 報告事項'>💡 報告事項</h3>", unsafe_allow_html=True)
-        # ▲▲▲ 変更ここまで ▲▲▲
         
         mac_default = 0
         hiyari_default = 0
@@ -889,6 +881,109 @@ def show_daily_report():
                 st.rerun()
             except Exception as e:
                 st.error(f"日報の送信に失敗しました: {e}")
+
+# --- 追加：Step1のフラグメント化（ロードのチラつき防止） ---
+@st.fragment
+def render_step1_fragment(schedule_df, display_df, selected_location, product_to_location):
+    st.markdown(f"<h3 style='font-size: clamp(0.9rem, 3.5vw, 1.4rem); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;'>Step 1: 新規工程を記録（{selected_location}）</h3>", unsafe_allow_html=True)
+    
+    filtered_schedule_df = schedule_df.copy()
+    if selected_location != "すべて":
+        if not filtered_schedule_df.empty and '拠点' in filtered_schedule_df.columns:
+            filtered_schedule_df = filtered_schedule_df[filtered_schedule_df['拠点'] == selected_location]
+    
+    customer_names = []
+    if not filtered_schedule_df.empty and '得意先名' in filtered_schedule_df.columns:
+        customer_names = sorted(filtered_schedule_df['得意先名'].dropna().unique().tolist())
+    
+    # ▼ 得意先を選ぶと、ここから下だけが更新される（画面全体はチカチカしない！）
+    selected_customer = st.selectbox("得意先名で絞り込み", ["すべての得意先"] + customer_names, key="customer_choice")
+    
+    with st.form(key="selection_form"):
+        product_list_df = filtered_schedule_df.copy()
+        if selected_customer != "すべての得意先":
+            product_list_df = product_list_df[product_list_df['得意先名'] == selected_customer]
+
+        schedule_products = []
+        if not product_list_df.empty and '品名' in product_list_df.columns:
+            schedule_products = product_list_df['品名'].dropna().unique().tolist()
+            
+        in_progress_products_in_location = []
+        if not display_df.empty:
+            if '得意先名' not in display_df.columns and '品名' in schedule_df.columns and '得意先名' in schedule_df.columns:
+                product_to_customer_map = schedule_df.drop_duplicates(subset=['品名']).set_index('品名')['得意先名'].to_dict()
+                display_df['得意先名'] = display_df['製品名'].map(product_to_customer_map)
+
+            if selected_customer != "すべての得意先":
+                if '得意先名' in display_df.columns:
+                    in_progress_products_in_location = display_df[display_df['得意先名'] == selected_customer]['製品名'].unique().tolist()
+            else:
+                in_progress_products_in_location = display_df['製品名'].unique().tolist()
+        
+        product_list = sorted(list(set(schedule_products + in_progress_products_in_location)))
+        
+        options = [""] + product_list
+        
+        default_product_index = 0
+        if 'product_choice_final' in st.session_state and st.session_state.product_choice_final in options:
+            default_product_index = options.index(st.session_state.product_choice_final)
+
+        selected_product = st.selectbox("製品を選択（リスト内で検索もできます）", options, index=default_product_index)
+        
+        if selected_product and selected_product != "" and not schedule_df.empty and '品名' in schedule_df.columns:
+            clean_selected = clean_text(selected_product)
+            if 'clean_品名_for_match' not in schedule_df.columns:
+                schedule_df['clean_品名_for_match'] = schedule_df['品名'].apply(clean_text)
+                
+            preview_row = schedule_df[schedule_df['clean_品名_for_match'] == clean_selected]
+            if not preview_row.empty:
+                p_info = preview_row.iloc[0]
+                p_qty = p_info.get(SCHEDULE_COL_TOTAL_QUANTITY, "ー")
+                p_detail = p_info.get(SCHEDULE_COL_DETAILS, "ー")
+                p_due = p_info.get(SCHEDULE_COL_DUE_DATE, "ー")
+                
+                remarks_list = [str(p_info[col]) for col in SCHEDULE_COL_REMARKS if col in p_info and pd.notna(p_info[col])]
+                p_memo = " | ".join(remarks_list)
+                
+                preview_text = f"📦 **総数:** {p_qty}　📅 **納期:** {p_due}　📝 **適用:** {p_detail}"
+                if p_memo:
+                    preview_text += f"\n💡 **備考:** {p_memo}"
+                
+                st.info(preview_text)
+
+        allow_manual_input = st.checkbox("リストにない製品を手入力する")
+        product_name_manual = st.text_input("新しい製品名を入力")
+        process_name = st.selectbox("記録する工程名", PROCESS_OPTIONS)
+        
+        submitted = st.form_submit_button("この工程の入力を開始する", type="primary")
+
+        if submitted:
+            product_name = product_name_manual if allow_manual_input and product_name_manual else selected_product
+            if not product_name or not process_name:
+                st.error("製品名と工程名を両方選択してください。")
+            else:
+                if 'default_page_count' in st.session_state: del st.session_state.default_page_count
+                if 'schedule_info_display' in st.session_state: del st.session_state.schedule_info_display
+                if 'auto_selected_location' in st.session_state: del st.session_state.auto_selected_location
+
+                if not schedule_df.empty and '品名' in schedule_df.columns:
+                    clean_target = clean_text(product_name)
+                    if 'clean_品名_for_match' not in schedule_df.columns:
+                        schedule_df['clean_品名_for_match'] = schedule_df['品名'].apply(clean_text)
+                    product_row = schedule_df[schedule_df['clean_品名_for_match'] == clean_target]
+                    
+                    if not product_row.empty:
+                        info = product_row.iloc[0]
+                        st.session_state.auto_selected_location = product_to_location.get(clean_target, "未設定")
+                        if process_name in ["中綴じ", "無線綴じ", "糸かがり", "綴じ（カレンダー）"] and SCHEDULE_COL_PAGE_COUNT in schedule_df.columns:
+                            page_count_val = pd.to_numeric(info.get(SCHEDULE_COL_PAGE_COUNT), errors='coerce')
+                            st.session_state.default_page_count = int(page_count_val) if pd.notna(page_count_val) else 0
+                        
+                st.session_state.selected_product = product_name
+                st.session_state.selected_process = process_name
+                st.session_state.sub_view = 'INPUT_FORM'
+                # 入力開始ボタンを押した時は画面全体を遷移させる
+                st.rerun()
 
 def main_app():
     if 'product_to_select' in st.session_state:
@@ -968,8 +1063,6 @@ def main_app():
                 st.session_state.naire_parent_customers = []
 
         if st.session_state.sub_view == 'SELECT_PROCESS':
-            st.header("通常工程の記録")
-            
             schedule_df = load_csv_data(SCHEDULE_FILE)
             location_options = ["すべて", "旭川", "札幌"]
             product_to_location = {}
@@ -1013,100 +1106,8 @@ def main_app():
             
             col_form, col_list = st.columns(2)
             with col_form:
-                st.markdown(f"<h3 style='font-size: clamp(0.9rem, 3.5vw, 1.4rem); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;'>Step 1: 新規工程を記録（{selected_location}）</h3>", unsafe_allow_html=True)
-                
-                filtered_schedule_df = schedule_df.copy()
-                if selected_location != "すべて":
-                    if not filtered_schedule_df.empty and '拠点' in filtered_schedule_df.columns:
-                        filtered_schedule_df = filtered_schedule_df[filtered_schedule_df['拠点'] == selected_location]
-                
-                # ▼ 変更: 得意先と製品の選択を統合し、ロードを完全になくす
-                with st.form(key="selection_form"):
-                    schedule_products = []
-                    product_to_customer_map = {}
-                    
-                    if not filtered_schedule_df.empty and '品名' in filtered_schedule_df.columns:
-                        schedule_products = filtered_schedule_df['品名'].dropna().unique().tolist()
-                        if '得意先名' in filtered_schedule_df.columns:
-                            product_to_customer_map = filtered_schedule_df.drop_duplicates(subset=['品名']).set_index('品名')['得意先名'].to_dict()
-
-                    in_progress_products_in_location = []
-                    if not display_df.empty:
-                        if '得意先名' not in display_df.columns and product_to_customer_map:
-                            display_df['得意先名'] = display_df['製品名'].map(product_to_customer_map)
-                        in_progress_products_in_location = display_df['製品名'].unique().tolist()
-                    
-                    product_list = sorted(list(set(schedule_products + in_progress_products_in_location)))
-                    options = [""] + product_list
-                    
-                    default_product_index = 0
-                    if 'product_choice_final' in st.session_state and st.session_state.product_choice_final in options:
-                        default_product_index = options.index(st.session_state.product_choice_final)
-
-                    # リストの見た目だけを「[得意先名] 製品名」に変更する魔法
-                    def format_product(prod_name):
-                        if not prod_name: return "（ここをタップして検索・選択）"
-                        customer = product_to_customer_map.get(prod_name, "得意先不明")
-                        return f"[{customer}] {prod_name}"
-
-                    selected_product = st.selectbox(
-                        "製品を選択（得意先名を入力すると一瞬で絞り込めます）", 
-                        options, 
-                        index=default_product_index,
-                        format_func=format_product
-                    )
-                    
-                    if selected_product and selected_product != "" and not schedule_df.empty and '品名' in schedule_df.columns:
-                        clean_selected = clean_text(selected_product)
-                        if 'clean_品名_for_match' not in schedule_df.columns:
-                            schedule_df['clean_品名_for_match'] = schedule_df['品名'].apply(clean_text)
-                            
-                        preview_row = schedule_df[schedule_df['clean_品名_for_match'] == clean_selected]
-                        if not preview_row.empty:
-                            p_info = preview_row.iloc[0]
-                            p_qty = p_info.get(SCHEDULE_COL_TOTAL_QUANTITY, "ー")
-                            p_detail = p_info.get(SCHEDULE_COL_DETAILS, "ー")
-                            p_due = p_info.get(SCHEDULE_COL_DUE_DATE, "ー")
-                            
-                            remarks_list = [str(p_info[col]) for col in SCHEDULE_COL_REMARKS if col in p_info and pd.notna(p_info[col])]
-                            p_memo = " | ".join(remarks_list)
-                            
-                            preview_text = f"📦 **総数:** {p_qty}　📅 **納期:** {p_due}　📝 **適用:** {p_detail}"
-                            if p_memo:
-                                preview_text += f"\n💡 **備考:** {p_memo}"
-                            
-                            st.info(preview_text)
-
-                    allow_manual_input = st.checkbox("リストにない製品を手入力する")
-                    product_name_manual = st.text_input("新しい製品名を入力")
-                    process_name = st.selectbox("記録する工程名", PROCESS_OPTIONS)
-                    
-                    submitted = st.form_submit_button("この工程の入力を開始する", type="primary")
-
-                    if submitted:
-                        product_name = product_name_manual if allow_manual_input and product_name_manual else selected_product
-                        if not product_name or not process_name:
-                            st.error("製品名と工程名を両方選択してください。")
-                        else:
-                            if 'default_page_count' in st.session_state: del st.session_state.default_page_count
-                            if 'schedule_info_display' in st.session_state: del st.session_state.schedule_info_display
-                            if 'auto_selected_location' in st.session_state: del st.session_state.auto_selected_location
-
-                            if not schedule_df.empty and '品名' in schedule_df.columns:
-                                clean_target = clean_text(product_name)
-                                if 'clean_品名_for_match' not in schedule_df.columns:
-                                    schedule_df['clean_品名_for_match'] = schedule_df['品名'].apply(clean_text)
-                                product_row = schedule_df[schedule_df['clean_品名_for_match'] == clean_target]
-                                
-                                if not product_row.empty:
-                                    info = product_row.iloc[0]
-                                    st.session_state.auto_selected_location = product_to_location.get(clean_target, "未設定")
-                                    if process_name in ["中綴じ", "無線綴じ", "糸かがり", "綴じ（カレンダー）"] and SCHEDULE_COL_PAGE_COUNT in schedule_df.columns:
-                                        page_count_val = pd.to_numeric(info.get(SCHEDULE_COL_PAGE_COUNT), errors='coerce')
-                                        st.session_state.default_page_count = int(page_count_val) if pd.notna(page_count_val) else 0
-                                    
-                            st.session_state.selected_product, st.session_state.selected_process, st.session_state.sub_view = product_name, process_name, 'INPUT_FORM'
-                            st.rerun()
+                # ▼ 変更: 入力フォームをフラグメント（部分更新）として呼び出す
+                render_step1_fragment(schedule_df, display_df, selected_location, product_to_location)
 
             with col_list:
                 st.markdown(f"<h3 style='font-size: clamp(0.9rem, 3.5vw, 1.4rem); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;'>進行中の作業一覧（{selected_location}）</h3>", unsafe_allow_html=True)
