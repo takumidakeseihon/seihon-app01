@@ -419,14 +419,13 @@ def process_form(is_edit_mode=False, default_data=None):
         
         col_btn1, col_btn2, col_btn3 = st.columns([1.2, 1.2, 2])
         if is_edit_mode:
-            submit_button = col_btn1.form_submit_button("更新する", type="primary", use_container_width=True, on_click=disable_buttons, disabled=st.session_state.submit_disabled)
+            submit_button = col_btn1.form_submit_button("更新する", type="primary", use_container_width=True)
             complete_button = None
         else:
-            submit_button = col_btn1.form_submit_button("作業中として追加", use_container_width=True, on_click=disable_buttons, disabled=st.session_state.submit_disabled)
-            complete_button = col_btn2.form_submit_button("この内容で最終完了", type="primary", use_container_width=True, on_click=disable_buttons, disabled=st.session_state.submit_disabled)
+            submit_button = col_btn1.form_submit_button("作業中として追加", use_container_width=True)
+            complete_button = col_btn2.form_submit_button("この内容で最終完了", type="primary", use_container_width=True)
         
         if col_btn3.form_submit_button("キャンセル"):
-            st.session_state.submit_disabled = False
             st.session_state.sub_view = 'SELECT_PROCESS'
             st.rerun()
 
@@ -465,7 +464,6 @@ def process_form(is_edit_mode=False, default_data=None):
         def run_validation_and_submit(status):
             if quantity <= 0:
                 st.error("❌ 出来数は1以上で入力してください。")
-                st.session_state.submit_disabled = False 
                 return
 
             final_data_dict = prepare_data_dict(status=status)
@@ -473,8 +471,6 @@ def process_form(is_edit_mode=False, default_data=None):
                 handler = handle_completion if status == "完了" else (handle_update if is_edit_mode else handle_add_in_progress)
                 args = (default_data.get('id'), final_data_dict) if is_edit_mode else (final_data_dict,)
                 handler(*args)
-            else:
-                st.session_state.submit_disabled = False
 
         if submit_button: run_validation_and_submit("作業中")
         if complete_button: run_validation_and_submit("完了")
@@ -493,8 +489,6 @@ def handle_db_write(operation, success_message, error_message, rerun_on_success=
                 st.rerun()
     except Exception as e:
         st.error(f"{error_message}: {e}")
-    finally:
-        st.session_state.submit_disabled = False
 
 def handle_update(doc_id, data_dict):
     handle_db_write(lambda: firestore.client().collection("in_progress").document(doc_id).update(data_dict), "記録を更新しました。", "更新中にエラーが発生")
@@ -1424,12 +1418,6 @@ def main_app():
 st.set_page_config(layout="wide")
 
 st.markdown("<h1 style='font-size: clamp(1.2rem, 5vw, 2.5rem); padding-top: 1rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;'>📘 製本記録アプリ</h1>", unsafe_allow_html=True)
-
-if 'submit_disabled' not in st.session_state:
-    st.session_state.submit_disabled = False
-
-def disable_buttons():
-    st.session_state.submit_disabled = True
 
 if 'sub_view' not in st.session_state:
     st.session_state.sub_view = 'SELECT_PROCESS'
