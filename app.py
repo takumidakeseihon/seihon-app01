@@ -714,7 +714,7 @@ def show_daily_report():
             today_tasks = today_df[involved_mask].sort_values('作成日時_dt')
             other_tasks = today_df[~involved_mask].sort_values('作成日時_dt') # ★ 追加: その日の自分以外の全作業
 
-    st.subheader(f"📋 {target_date.strftime('%m月%d日')} のあなたの作業履歴")
+    st.markdown(f"<h3 style='font-size: clamp(1.1rem, 4vw, 1.5rem); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;' title='📋 {target_date.strftime('%m月%d日')} のあなたの作業履歴'>📋 {target_date.strftime('%m月%d日')} のあなたの作業履歴</h3>", unsafe_allow_html=True)
     if today_tasks.empty:
         st.info("この日の作業記録はまだありません。（※補助として参加した場合、機長が未入力の可能性があります）")
     else:
@@ -812,22 +812,25 @@ def show_daily_report():
     st.divider()
     
     with st.form("daily_report_form"):
-        st.subheader("⏰ 退勤時間の記録（残業申請）")
-        st.info("タイムカードの打刻と照合します。退勤（予定）時間を入力してください。")
+        st.markdown("<h3 style='font-size: clamp(1.1rem, 4vw, 1.5rem); margin-bottom: 0.5rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;' title='⏰ 退勤時間の記録（残業申請）'>⏰ 退勤時間の記録（残業申請）</h3>", unsafe_allow_html=True)
+        st.info("定時の17:30を超えて作業する場合（残業した場合）に退勤時間を選択してください。")
         
-        # 15分単位の選択肢を生成 (00:00 〜 23:45)
-        time_options = [f"{h:02d}:{m:02d}" for h in range(24) for m in (0, 15, 30, 45)]
+        # 17:45から15分単位の選択肢を生成
+        time_options = ["残業なし（定時退社）"] + [f"{h:02d}:{m:02d}" for h in range(17, 24) for m in (0, 15, 30, 45) if (h == 17 and m >= 45) or h > 17]
         
-        default_time_str = "17:30"
+        default_time_str = "残業なし（定時退社）"
         if is_target_submitted:
-            default_time_str = submitted_report.get("退勤時間", "17:30")
+            default_time_str = submitted_report.get("退勤時間", "残業なし（定時退社）")
         elif target_date == today:
             now_dt = datetime.now(timezone(timedelta(hours=9)))
-            rounded_minute = (now_dt.minute // 15) * 15
-            default_time_str = f"{now_dt.hour:02d}:{rounded_minute:02d}"
+            if now_dt.hour >= 17:
+                rounded_minute = (now_dt.minute // 15) * 15
+                guess_time = f"{now_dt.hour:02d}:{rounded_minute:02d}"
+                if guess_time in time_options:
+                    default_time_str = guess_time
             
         default_index = time_options.index(default_time_str) if default_time_str in time_options else 0
-        leave_time_str = st.selectbox("退勤時間（15分単位）", time_options, index=default_index)
+        leave_time_str = st.selectbox("退勤時間", time_options, index=default_index)
         
         st.divider()
         st.subheader("💡 報告事項")
