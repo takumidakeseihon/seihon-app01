@@ -434,15 +434,15 @@ def process_form(is_edit_mode=False, default_data=None):
             work_time_minutes = 0
             if process_name == "断裁":
                 work_time_minutes = work_time_minutes_input
-            elif start_time_obj and end_time_obj:
+            else:
+                if not start_time_obj or not end_time_obj:
+                    st.error("❌ 開始時間と終了時間は必須入力です。")
+                    return None
                 if end_time_obj <= start_time_obj:
                     st.error("❌ 終了時間は開始時間よりも後の時刻を選択してください。")
                     return None
                 delta = datetime.combine(datetime.today(), end_time_obj) - datetime.combine(datetime.today(), start_time_obj)
                 work_time_minutes = delta.total_seconds() / 60
-            elif process_name != "断裁" and (start_time_obj or end_time_obj):
-                st.error("❌ 開始時間と終了時間を両方入力してください。")
-                return None
             
             return {
                 "入力者名": st.session_state.logged_in_user,
