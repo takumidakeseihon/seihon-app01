@@ -156,11 +156,23 @@ def init_firebase():
         st.info("💡 ヒント: Streamlit Cloudの「Advanced settings...」＞「Secrets」に貼り付けた鍵の形式が間違っている可能性があります。")
         return None
 
+# ★エラー修正箇所★
+# _dbとしてキャッシュエラーを防ぎ、days_limitを受け取れるように修正しました。
 @st.cache_data(ttl=600)
-def load_from_firestore(_db, collection_name, active_only=False):
+def load_from_firestore(_db, collection_name, active_only=False, days_limit=None):
     if not _db: return pd.DataFrame()
     try:
-        docs = _db.collection(collection_name).stream()
+        query = _db.collection(collection_name)
+        
+        # 件数制限（days_limit）が指定されている場合は制限をかけて取得
+        if days_limit:
+            try:
+                docs = query.order_by("作成日時", direction=firestore.Query.DESCENDING).limit(days_limit).stream()
+            except:
+                docs = query.limit(days_limit).stream()
+        else:
+            docs = query.stream()
+            
         records = [doc.to_dict() | {'id': doc.id} for doc in docs]
         
         if not records:
