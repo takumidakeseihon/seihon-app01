@@ -594,25 +594,11 @@ def main_app():
     def clear_cache_and_rerun():
         load_from_firestore.clear()
         load_tasks_for_customer.clear()
+        load_csv_data.clear() # ← ★この1行を追加しました！
         st.rerun()
         
     st.sidebar.button("データを更新", on_click=clear_cache_and_rerun, use_container_width=True)
     
-    # ★ 管理者向け（手動CSVアップロード）機能の追加 ★
-    with st.sidebar.expander("🛠️ 管理者メニュー (CSV手動更新)"):
-        st.info("朝の自動更新が失敗した場合などに、ここから今日の予定表を一時的に読み込ませることができます。")
-        uploaded_file = st.file_uploader("予定表 (schedule.csv) をアップロード", type=['csv'])
-        if uploaded_file is not None:
-            try:
-                df = pd.read_csv(uploaded_file, encoding="utf-8-sig")
-                st.session_state.manual_schedule_df = df
-                st.success("✅ 手動アップロードされたCSVを適用しました！")
-                if st.button("画面を更新して反映する", use_container_width=True):
-                    load_csv_data.clear()
-                    st.rerun()
-            except Exception as e:
-                st.error(f"読み込みエラー: {e}")
-
     main_view = st.radio(
         "メニューを選択", 
         ["🔧 通常工程の記録", "📦 名入れ一括登録"], 
