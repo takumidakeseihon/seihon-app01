@@ -106,23 +106,20 @@ WORKER_ID_MAP = {
 }
 ID_TO_WORKER = {v: k for k, v in WORKER_ID_MAP.items()}
 
-# --- データ読み込み・認証関数（★自動化URL＆手動アップロード対応版） ---
+# --- データ読み込み・認証関数 ---
 @st.cache_data(ttl=3600)
 def load_csv_data(file_path):
-    # ① 管理者が手動アップロードしたデータがあれば最優先で使う（フェイルセーフ）
     if file_path == SCHEDULE_FILE and 'manual_schedule_df' in st.session_state:
         return st.session_state.manual_schedule_df
 
-    # ② SecretsにDropbox等のURLが設定されていれば、そこから自動で読み込む
     if file_path == SCHEDULE_FILE and "SCHEDULE_CSV_URL" in st.secrets:
         url = st.secrets["SCHEDULE_CSV_URL"]
         if url:
             try:
                 return pd.read_csv(url, encoding="utf-8-sig")
             except Exception as e:
-                pass # URLからの読み込みに失敗した場合は、下のローカル読み込みに進む
+                pass 
 
-    # ③ 上記がダメなら、同じフォルダにあるファイル（ローカルファイル）を読む
     try:
         df = pd.read_csv(file_path, encoding="utf-8-sig")
         return df
@@ -134,7 +131,6 @@ def load_csv_data(file_path):
 
 @st.cache_resource
 def init_firebase():
-    """Firebaseへの接続を初期化し、DBインスタンスを返す"""
     try:
         if not firebase_admin._apps:
             if os.environ.get("FIREBASE_KEY_JSON"):
@@ -153,18 +149,13 @@ def init_firebase():
             return firestore.client()
     except Exception as e:
         st.error(f"データベース接続エラー: {e}")
-        st.info("💡 ヒント: Streamlit Cloudの「Advanced settings...」＞「Secrets」に貼り付けた鍵の形式が間違っている可能性があります。")
         return None
 
-# ★エラー修正箇所★
-# _dbとしてキャッシュエラーを防ぎ、days_limitを受け取れるように修正しました。
 @st.cache_data(ttl=600)
 def load_from_firestore(_db, collection_name, active_only=False, days_limit=None):
     if not _db: return pd.DataFrame()
     try:
         query = _db.collection(collection_name)
-        
-        # 件数制限（days_limit）が指定されている場合は制限をかけて取得
         if days_limit:
             try:
                 docs = query.order_by("作成日時", direction=firestore.Query.DESCENDING).limit(days_limit).stream()
@@ -218,13 +209,9 @@ def process_form(is_edit_mode=False, default_data=None):
     product_name = default_data.get('製品名', st.session_state.get('selected_product', ''))
     process_name = default_data.get('工程名', st.session_state.get('selected_process', ''))
     
-    # ▼▼▼ 変更箇所1：Step2の見出しを絶対に1行にする ▼▼▼
-    # title属性を付けたので、パソコンならマウスを重ねると「...」の全文がポップアップで確認できます
     st.markdown(f"<h2 style='font-size: clamp(0.9rem, 3.5vw, 1.6rem); margin-bottom: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;' title='Step 2: 「{product_name}」の作業内容を記録'>Step 2: 「{product_name}」の作業内容を記録</h2>", unsafe_allow_html=True)
     st.markdown(f"<h3 style='font-size: clamp(0.8rem, 3vw, 1.2rem); color: #555; margin-top: 5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;'>工程: <b>{process_name}</b></h3>", unsafe_allow_html=True)
-    # ▲▲▲ 変更ここまで ▲▲▲
     
-    # ▼▼▼ 最強の照合ロジック（全角半角・スペース無視） ▼▼▼
     schedule_df = load_csv_data(SCHEDULE_FILE)
     if not schedule_df.empty and '品名' in schedule_df.columns:
         clean_target = clean_text(product_name)
@@ -342,7 +329,6 @@ def process_form(is_edit_mode=False, default_data=None):
             
         other_workers = [name for name in base_workers if name != st.session_state.logged_in_user and name != "（自分の名前を選択してください）"]
 
-        # ★★★ 共同作業者の安全な処理 ★★★
         raw_co_workers = default_data.get('共同作業者', [])
         
         if isinstance(raw_co_workers, list):
@@ -611,13 +597,9 @@ def show_bookmark_page(user_name):
 
 # --- 日報機能の復活 ---
 def show_daily_report():
-    # ▼▼▼ 変更箇所：日報のタイトルを絶対に1行にする ▼▼▼
-    # 変更前: st.header("📝 日報（退勤報告）")
     st.markdown("<h2 style='font-size: clamp(1.2rem, 5vw, 2rem); margin-bottom: 1rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;' title='📝 日報（退勤報告）'>📝 日報（退勤報告）</h2>", unsafe_allow_html=True)
-    # ▲▲▲ 変更ここまで ▲▲▲
     
     user = st.session_state.logged_in_user
-    
     st.write(f"**{user}** さん、お疲れ様です！")
     
     with st.spinner("提出状況を確認しています..."):
@@ -625,7 +607,6 @@ def show_daily_report():
         
     today = datetime.now(timezone(timedelta(hours=9))).date()
     
-    # ▼▼▼ 変更箇所：直近7日間のステータス表示をコンパクトに ▼▼▼
     st.markdown("<h5 style='font-size: clamp(0.9rem, 3.5vw, 1.1rem); margin-bottom: 10px;'>📅 直近1週間の提出状況</h5>", unsafe_allow_html=True)
     
     html_blocks = ['<div style="display: flex; justify-content: space-between; gap: 4px; margin-bottom: 20px;">']
@@ -641,42 +622,37 @@ def show_daily_report():
             if not reports_df[(reports_df['提出者'] == user) & (reports_df['日付'] == d_str)].empty:
                 is_submitted = True
                 
-        # ステータスごとの色分け設定
         if is_submitted:
-            bg_color, text_color, border_color = "#d1fae5", "#065f46", "#34d399" # 提出済み（緑）
+            bg_color, text_color, border_color = "#d1fae5", "#065f46", "#34d399"
             status_text = "✅済"
         elif d == today:
-            bg_color, text_color, border_color = "#fef3c7", "#92400e", "#fbbf24" # 今日（黄色）
+            bg_color, text_color, border_color = "#fef3c7", "#92400e", "#fbbf24"
             status_text = "📝今日"
         else:
-            bg_color, text_color, border_color = "#f3f4f6", "#6b7280", "#e5e7eb" # 過去未提出（グレー）
+            bg_color, text_color, border_color = "#f3f4f6", "#6b7280", "#e5e7eb"
             status_text = "－"
             
         date_weight = "bold" if d == today else "normal"
         date_color = "#333" if d == today else "#666"
             
-        block = f'''
-        <div style="flex: 1; text-align: center; font-size: clamp(0.6rem, 2.5vw, 0.85rem);">
-            <div style="color: {date_color}; font-weight: {date_weight}; margin-bottom: 4px; line-height: 1.2;">{disp_date}<br>({day_label})</div>
-            <div style="background-color: {bg_color}; color: {text_color}; padding: 4px 0; border-radius: 6px; border: 1px solid {border_color}; font-weight: bold; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;" title="{status_text}">{status_text}</div>
-        </div>
-        '''
+        # ★ エラー解決の要：HTMLの左側の空白（インデント）を完全に無くして書いています
+        block = f'''<div style="flex: 1; text-align: center; font-size: clamp(0.6rem, 2.5vw, 0.85rem);">
+<div style="color: {date_color}; font-weight: {date_weight}; margin-bottom: 4px; line-height: 1.2;">{disp_date}<br>({day_label})</div>
+<div style="background-color: {bg_color}; color: {text_color}; padding: 4px 0; border-radius: 6px; border: 1px solid {border_color}; font-weight: bold; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;" title="{status_text}">{status_text}</div>
+</div>'''
         html_blocks.append(block)
         
     html_blocks.append('</div>')
     st.markdown("".join(html_blocks), unsafe_allow_html=True)
-    # ▲▲▲ 変更ここまで ▲▲▲
                 
     st.divider()
     
-    # ▼ 対象日の選択
     target_date = st.date_input(
         "📅 提出（または確認）する対象日を選択してください",
         value=today
     )
     target_date_str = target_date.strftime('%Y-%m-%d')
 
-    # --- 提出済みチェック ---
     is_target_submitted = False
     submitted_report = None
     if not reports_df.empty and '提出者' in reports_df.columns and '日付' in reports_df.columns:
@@ -698,11 +674,9 @@ def show_daily_report():
                 st.write("- **添付写真:** あり（データベースに保存されています）")
 
     with st.spinner(f"{target_date.strftime('%Y年%m月%d日')} の作業履歴をまとめています..."):
-        # 作業記録を取得（★ 完了記録は直近30日分のみに絞り込んで節約！）
         in_prog_df = load_from_firestore(db, "in_progress")
         comp_df = load_from_firestore(db, "completed", days_limit=30)
         
-        # ★ 追加: どっちのコレクションに保存されているかマーキング
         if not in_prog_df.empty:
             in_prog_df['_collection'] = "in_progress"
         if not comp_df.empty:
@@ -711,16 +685,12 @@ def show_daily_report():
         all_df = pd.concat([in_prog_df, comp_df], ignore_index=True)
         
     today_tasks = pd.DataFrame()
-    other_tasks = pd.DataFrame() # ★ 追加: 自分が関わっていない他のタスク
+    other_tasks = pd.DataFrame()
     
     if not all_df.empty and '作成日時' in all_df.columns:
-        # 時間を日本時間に変換
         all_df['作成日時_dt'] = pd.to_datetime(all_df['作成日時'], utc=True).dt.tz_convert('Asia/Tokyo')
-        
-        # 選択された対象日のデータに絞り込み
         today_df = all_df[all_df['作成日時_dt'].dt.date == target_date]
         
-        # 自分が入力者、または共同作業者に含まれているものを探す
         def is_involved(row):
             if row.get('入力者名') == user: return True
             co_workers = row.get('共同作業者', [])
@@ -731,9 +701,11 @@ def show_daily_report():
         if not today_df.empty:
             involved_mask = today_df.apply(is_involved, axis=1)
             today_tasks = today_df[involved_mask].sort_values('作成日時_dt')
-            other_tasks = today_df[~involved_mask].sort_values('作成日時_dt') # ★ 追加: その日の自分以外の全作業
+            other_tasks = today_df[~involved_mask].sort_values('作成日時_dt')
 
-    st.markdown(f"<h3 style='font-size: clamp(1.1rem, 4vw, 1.5rem); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;' title='📋 {target_date.strftime('%m月%d日')} のあなたの作業履歴'>📋 {target_date.strftime('%m月%d日')} のあなたの作業履歴</h3>", unsafe_allow_html=True)
+    # ▼▼▼ スマホで1行にするための修正（追加反映） ▼▼▼
+    st.markdown(f"<h3 style='font-size: clamp(1rem, 4vw, 1.4rem); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;' title='📋 {target_date.strftime('%m月%d日')} のあなたの作業履歴'>📋 {target_date.strftime('%m月%d日')} のあなたの作業履歴</h3>", unsafe_allow_html=True)
+    
     if today_tasks.empty:
         st.info("この日の作業記録はまだありません。（※補助として参加した場合、機長が未入力の可能性があります）")
     else:
@@ -758,7 +730,6 @@ def show_daily_report():
                 
             st.markdown(f"- **{product}** ＞ {process} {helper_text}  \n  └ {extra_info}")
 
-    # ▼▼▼ レベル2: 他の人の作業に後から自分を追加する機能 ▼▼▼
     with st.expander("🔍 手伝ったのに上の履歴にない場合はここをクリック", expanded=False):
         st.markdown("他の人が入力した作業記録から、自分が手伝った作業を見つけて「共同作業者」として名前を追加できます。")
         
@@ -767,7 +738,6 @@ def show_daily_report():
         else:
             task_options = {}
             for idx, row in other_tasks.iterrows():
-                # プルダウン用の分かりやすいテキストを作成
                 time_str = row['作成日時_dt'].strftime('%H:%M')
                 product = row.get('製品名', '名称不明')
                 process = row.get('工程名', '工程不明')
@@ -787,7 +757,6 @@ def show_daily_report():
                 if st.button("🙋‍♂️ この作業の「共同作業者」に自分を追加する", type="primary"):
                     try:
                         with st.spinner("データベースを更新中..."):
-                            # 既存の共同作業者リストを取得
                             raw_co_workers = target_row.get('共同作業者', [])
                             if isinstance(raw_co_workers, list):
                                 new_co_workers = list(raw_co_workers)
@@ -796,11 +765,9 @@ def show_daily_report():
                             else:
                                 new_co_workers = []
                                 
-                            # 自分をリストに追加
                             if user not in new_co_workers:
                                 new_co_workers.append(user)
                                 
-                            # Firestoreの該当ドキュメントを更新
                             collection_name = target_row.get('_collection')
                             doc_id = target_row.get('id')
                             
@@ -809,14 +776,13 @@ def show_daily_report():
                                     '共同作業者': new_co_workers
                                 })
                                 st.success("✅ 作業履歴にあなたを追加しました！画面を更新します。")
-                                load_from_firestore.clear() # キャッシュをクリアして最新を読み込ませる
+                                load_from_firestore.clear()
                                 st.rerun()
                             else:
                                 st.error("データエラーにより追加できませんでした。")
                     except Exception as e:
                         st.error(f"追加中にエラーが発生しました: {e}")
         
-        # ▼ 追加: どうしても見つからない時の手入力欄（レベル1）
         st.divider()
         st.markdown("##### ✍️ 上のリストにも作業が見つからない場合")
         missing_work_val = submitted_report.get('漏れている作業', '') if is_target_submitted else ""
@@ -826,12 +792,12 @@ def show_daily_report():
             placeholder="例: 13:00〜14:00 〇〇の折り作業を手伝いました",
             height=80
         )
-    # ▲▲▲ レベル2 追加ここまで ▲▲▲
 
     st.divider()
     
     with st.form("daily_report_form"):
-        st.markdown("<h3 style='font-size: clamp(1.1rem, 4vw, 1.5rem); margin-bottom: 0.5rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;' title='⏰ 退勤時間の記録（残業申請）'>⏰ 退勤時間の記録（残業申請）</h3>", unsafe_allow_html=True)
+        # ▼▼▼ スマホで1行にしつつ、残業申請用の選択肢にする修正（追加反映） ▼▼▼
+        st.markdown("<h3 style='font-size: clamp(1rem, 4vw, 1.4rem); margin-bottom: 0.5rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;' title='⏰ 退勤時間の記録（残業申請）'>⏰ 退勤時間の記録（残業申請）</h3>", unsafe_allow_html=True)
         st.info("定時の17:30を超えて作業する場合（残業した場合）に退勤時間を選択してください。")
         
         # 17:45から15分単位の選択肢を生成
@@ -868,7 +834,6 @@ def show_daily_report():
             
             report_text_val = submitted_report.get('特記事項', '')
 
-        # 疲れ具合の項目を削除し、機械の調子のみ表示
         machine_cond = st.radio("機械の調子はどうでしたか？", ["✨ 絶好調", "🔧 ちょっと変な音がした", "⚠️ 修理が必要", "➖ 機械は使っていない"], index=mac_default)
             
         hiyari = st.radio("ヒヤリハット・ミスはありましたか？", ["なし", "あり（下の特記事項に記入してください）"], index=hiyari_default)
@@ -899,8 +864,8 @@ def show_daily_report():
                 "日付": target_date.strftime('%Y-%m-%d'),
                 "作成日時": firestore.SERVER_TIMESTAMP,
                 "退勤時間": leave_time_str, 
-                "漏れている作業": missing_work, # ← 手入力のメモを保存
-                "機械の調子": machine_cond,     # ← 疲れ具合は保存対象から除外
+                "漏れている作業": missing_work,
+                "機械の調子": machine_cond,
                 "ヒヤリハット": hiyari,
                 "特記事項": report_text,
                 "写真データ": photo_base64,
@@ -958,12 +923,11 @@ def main_app():
     def clear_cache_and_rerun():
         load_from_firestore.clear()
         load_tasks_for_customer.clear()
-        load_csv_data.clear() # ★キャッシュクリア処理を完全実装
+        load_csv_data.clear()
         st.rerun()
         
     st.sidebar.button("データを更新", on_click=clear_cache_and_rerun, use_container_width=True)
     
-    # ★ 管理者向け（手動CSVアップロード）フェイルセーフ機能
     with st.sidebar.expander("🛠️ 管理者メニュー (CSV手動更新)"):
         st.info("朝の自動更新が失敗した場合などに、ここから今日の予定表を一時的に読み込ませることができます。")
         uploaded_file = st.file_uploader("予定表 (schedule.csv) をアップロード", type=['csv'])
@@ -978,7 +942,6 @@ def main_app():
             except Exception as e:
                 st.error(f"読み込みエラー: {e}")
 
-    # ★ メニューに「日報（退勤報告）」を復活！
     main_view = st.radio(
         "メニューを選択", 
         ["🔧 通常工程の記録", "📦 名入れ一括登録", "📝 日報（退勤報告）"], 
@@ -1016,7 +979,6 @@ def main_app():
                     if loc not in location_options:
                         location_options.append(loc)
                 
-                # ▼▼▼ 最強の照合ロジック適用 ▼▼▼
                 schedule_df['clean_品名'] = schedule_df['品名'].apply(clean_text)
                 product_to_location = schedule_df.drop_duplicates(subset=['clean_品名']).set_index('clean_品名')['拠点'].to_dict()
                 st.session_state.product_to_location = product_to_location
@@ -1048,9 +1010,7 @@ def main_app():
             
             col_form, col_list = st.columns(2)
             with col_form:
-                # ▼▼▼ 変更箇所2：Step1の見出しを絶対に1行にする ▼▼▼
                 st.markdown(f"<h3 style='font-size: clamp(0.9rem, 3.5vw, 1.4rem); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;'>Step 1: 新規工程を記録（{selected_location}）</h3>", unsafe_allow_html=True)
-                # ▲▲▲ 変更ここまで ▲▲▲
                 
                 filtered_schedule_df = schedule_df.copy()
                 if selected_location != "すべて":
@@ -1092,7 +1052,6 @@ def main_app():
 
                     selected_product = st.selectbox("製品を選択（リスト内で検索もできます）", options, index=default_product_index)
                     
-                    # ▼▼▼ 最強の照合ロジック適用（Step1プレビュー表示） ▼▼▼
                     if selected_product and selected_product != "" and not schedule_df.empty and '品名' in schedule_df.columns:
                         clean_selected = clean_text(selected_product)
                         if 'clean_品名_for_match' not in schedule_df.columns:
@@ -1113,7 +1072,6 @@ def main_app():
                                 preview_text += f"\n💡 **備考:** {p_memo}"
                             
                             st.info(preview_text)
-                    # ▲▲▲ 修正ここまで ▲▲▲
 
                     allow_manual_input = st.checkbox("リストにない製品を手入力する")
                     product_name_manual = st.text_input("新しい製品名を入力")
@@ -1131,7 +1089,6 @@ def main_app():
                             if 'auto_selected_location' in st.session_state: del st.session_state.auto_selected_location
 
                             if not schedule_df.empty and '品名' in schedule_df.columns:
-                                # ▼▼▼ 最強の照合ロジック適用（Step1送信時） ▼▼▼
                                 clean_target = clean_text(product_name)
                                 if 'clean_品名_for_match' not in schedule_df.columns:
                                     schedule_df['clean_品名_for_match'] = schedule_df['品名'].apply(clean_text)
@@ -1143,15 +1100,12 @@ def main_app():
                                     if process_name in ["中綴じ", "無線綴じ", "糸かがり", "綴じ（カレンダー）"] and SCHEDULE_COL_PAGE_COUNT in schedule_df.columns:
                                         page_count_val = pd.to_numeric(info.get(SCHEDULE_COL_PAGE_COUNT), errors='coerce')
                                         st.session_state.default_page_count = int(page_count_val) if pd.notna(page_count_val) else 0
-                                # ▲▲▲ 修正ここまで ▲▲▲
                                     
                             st.session_state.selected_product, st.session_state.selected_process, st.session_state.sub_view = product_name, process_name, 'INPUT_FORM'
                             st.rerun()
 
             with col_list:
-                # ▼▼▼ 変更箇所3：一覧の見出しを絶対に1行にする ▼▼▼
                 st.markdown(f"<h3 style='font-size: clamp(0.9rem, 3.5vw, 1.4rem); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;'>進行中の作業一覧（{selected_location}）</h3>", unsafe_allow_html=True)
-                # ▲▲▲ 変更ここまで ▲▲▲
                 
                 view_filter = st.radio(
                     "表示フィルター",
@@ -1459,16 +1413,12 @@ def main_app():
                             st.session_state.success_msg = f"{len(checked_items)}件を「出荷待ち」に更新し、関連する作業記録を「完了」に移動しました。"
                             st.rerun()
 
-    # ★ メニューで「日報（退勤報告）」が選ばれた時の処理
     elif main_view == "📝 日報（退勤報告）":
         show_daily_report()
 
-# --- Streamlitのメイン処理の分岐 ---
 st.set_page_config(layout="wide")
 
-# ▼▼▼ 変更箇所4：アプリの大タイトルを絶対に1行にする ▼▼▼
 st.markdown("<h1 style='font-size: clamp(1.2rem, 5vw, 2.5rem); padding-top: 1rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;'>📘 製本記録アプリ</h1>", unsafe_allow_html=True)
-# ▲▲▲ 変更ここまで ▲▲▲
 
 if 'submit_disabled' not in st.session_state:
     st.session_state.submit_disabled = False
@@ -1479,7 +1429,6 @@ def disable_buttons():
 if 'sub_view' not in st.session_state:
     st.session_state.sub_view = 'SELECT_PROCESS'
 
-# グローバルのデータベース接続（関数からも呼び出せるように）
 db = init_firebase()
 if not db:
     st.stop()
