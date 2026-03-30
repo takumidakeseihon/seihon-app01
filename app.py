@@ -955,18 +955,17 @@ def main_app():
     st.divider()
     
     if main_view == "🔧 通常工程の記録":
-        with st.spinner("作業中データを読み込んでいます..."):
-            in_progress_df = load_from_firestore(db, "in_progress")
-            st.session_state.in_progress_df = in_progress_df
+        # ▼ スピナーを外してロードのチカチカを防止
+        in_progress_df = load_from_firestore(db, "in_progress")
+        st.session_state.in_progress_df = in_progress_df
 
         if 'naire_parent_customers' not in st.session_state:
-            with st.spinner("名入れマスタを読み込んでいます..."):
-                naire_df = load_from_firestore(db, "naire_master", active_only=True)
-                st.session_state.naire_df = naire_df
-                if not naire_df.empty and '得意先名' in naire_df.columns:
-                    st.session_state.naire_parent_customers = naire_df['得意先名'].dropna().unique().tolist()
-                else:
-                    st.session_state.naire_parent_customers = []
+            naire_df = load_from_firestore(db, "naire_master", active_only=True)
+            st.session_state.naire_df = naire_df
+            if not naire_df.empty and '得意先名' in naire_df.columns:
+                st.session_state.naire_parent_customers = naire_df['得意先名'].dropna().unique().tolist()
+            else:
+                st.session_state.naire_parent_customers = []
 
         if st.session_state.sub_view == 'SELECT_PROCESS':
             st.header("通常工程の記録")
@@ -1021,40 +1020,41 @@ def main_app():
                     if not filtered_schedule_df.empty and '拠点' in filtered_schedule_df.columns:
                         filtered_schedule_df = filtered_schedule_df[filtered_schedule_df['拠点'] == selected_location]
                 
-                customer_names = []
-                if not filtered_schedule_df.empty and '得意先名' in filtered_schedule_df.columns:
-                    customer_names = sorted(filtered_schedule_df['得意先名'].dropna().unique().tolist())
-                
-                selected_customer = st.selectbox("得意先名で絞り込み", ["すべての得意先"] + customer_names, key="customer_choice")
-                
+                # ▼ 変更: 得意先と製品の選択を統合し、ロードを完全になくす
                 with st.form(key="selection_form"):
-                    product_list_df = filtered_schedule_df.copy()
-                    if selected_customer != "すべての得意先":
-                        product_list_df = product_list_df[product_list_df['得意先名'] == selected_customer]
-
-                    schedule_products = product_list_df['品名'].dropna().unique().tolist()
+                    schedule_products = []
+                    product_to_customer_map = {}
                     
+                    if not filtered_schedule_df.empty and '品名' in filtered_schedule_df.columns:
+                        schedule_products = filtered_schedule_df['品名'].dropna().unique().tolist()
+                        if '得意先名' in filtered_schedule_df.columns:
+                            product_to_customer_map = filtered_schedule_df.drop_duplicates(subset=['品名']).set_index('品名')['得意先名'].to_dict()
+
                     in_progress_products_in_location = []
                     if not display_df.empty:
-                        if '得意先名' not in display_df.columns and '品名' in schedule_df.columns and '得意先名' in schedule_df.columns:
-                            product_to_customer_map = schedule_df.drop_duplicates(subset=['品名']).set_index('品名')['得意先名'].to_dict()
+                        if '得意先名' not in display_df.columns and product_to_customer_map:
                             display_df['得意先名'] = display_df['製品名'].map(product_to_customer_map)
-
-                        if selected_customer != "すべての得意先":
-                            if '得意先名' in display_df.columns:
-                                in_progress_products_in_location = display_df[display_df['得意先名'] == selected_customer]['製品名'].unique().tolist()
-                        else:
-                            in_progress_products_in_location = display_df['製品名'].unique().tolist()
+                        in_progress_products_in_location = display_df['製品名'].unique().tolist()
                     
                     product_list = sorted(list(set(schedule_products + in_progress_products_in_location)))
-                    
                     options = [""] + product_list
                     
                     default_product_index = 0
                     if 'product_choice_final' in st.session_state and st.session_state.product_choice_final in options:
                         default_product_index = options.index(st.session_state.product_choice_final)
 
-                    selected_product = st.selectbox("製品を選択（リスト内で検索もできます）", options, index=default_product_index)
+                    # リストの見た目だけを「[得意先名] 製品名」に変更する魔法
+                    def format_product(prod_name):
+                        if not prod_name: return "（ここをタップして検索・選択）"
+                        customer = product_to_customer_map.get(prod_name, "得意先不明")
+                        return f"[{customer}] {prod_name}"
+
+                    selected_product = st.selectbox(
+                        "製品を選択（得意先名を入力すると一瞬で絞り込めます）", 
+                        options, 
+                        index=default_product_index,
+                        format_func=format_product
+                    )
                     
                     if selected_product and selected_product != "" and not schedule_df.empty and '品名' in schedule_df.columns:
                         clean_selected = clean_text(selected_product)
