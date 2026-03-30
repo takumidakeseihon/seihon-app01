@@ -625,28 +625,47 @@ def show_daily_report():
         
     today = datetime.now(timezone(timedelta(hours=9))).date()
     
-    # ▼ 直近7日間のステータス表示
-    st.markdown("##### 📅 直近1週間の提出状況")
-    status_cols = st.columns(7)
+    # ▼▼▼ 変更箇所：直近7日間のステータス表示をコンパクトに ▼▼▼
+    st.markdown("<h5 style='font-size: clamp(0.9rem, 3.5vw, 1.1rem); margin-bottom: 10px;'>📅 直近1週間の提出状況</h5>", unsafe_allow_html=True)
+    
+    html_blocks = ['<div style="display: flex; justify-content: space-between; gap: 4px; margin-bottom: 20px;">']
     
     for i in range(7):
         d = today - timedelta(days=6-i)
         d_str = d.strftime('%Y-%m-%d')
         day_label = ["月", "火", "水", "木", "金", "土", "日"][d.weekday()]
-        disp_date = f"{d.month}/{d.day}({day_label})"
+        disp_date = f"{d.month}/{d.day}"
         
         is_submitted = False
         if not reports_df.empty and '提出者' in reports_df.columns and '日付' in reports_df.columns:
             if not reports_df[(reports_df['提出者'] == user) & (reports_df['日付'] == d_str)].empty:
                 is_submitted = True
                 
-        with status_cols[i]:
-            if is_submitted:
-                st.success(f"{disp_date}  \n✅済")
-            elif d == today:
-                st.warning(f"{disp_date}  \n📝今日")
-            else:
-                st.info(f"{disp_date}  \n－")
+        # ステータスごとの色分け設定
+        if is_submitted:
+            bg_color, text_color, border_color = "#d1fae5", "#065f46", "#34d399" # 提出済み（緑）
+            status_text = "✅済"
+        elif d == today:
+            bg_color, text_color, border_color = "#fef3c7", "#92400e", "#fbbf24" # 今日（黄色）
+            status_text = "📝今日"
+        else:
+            bg_color, text_color, border_color = "#f3f4f6", "#6b7280", "#e5e7eb" # 過去未提出（グレー）
+            status_text = "－"
+            
+        date_weight = "bold" if d == today else "normal"
+        date_color = "#333" if d == today else "#666"
+            
+        block = f'''
+        <div style="flex: 1; text-align: center; font-size: clamp(0.6rem, 2.5vw, 0.85rem);">
+            <div style="color: {date_color}; font-weight: {date_weight}; margin-bottom: 4px; line-height: 1.2;">{disp_date}<br>({day_label})</div>
+            <div style="background-color: {bg_color}; color: {text_color}; padding: 4px 0; border-radius: 6px; border: 1px solid {border_color}; font-weight: bold; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;" title="{status_text}">{status_text}</div>
+        </div>
+        '''
+        html_blocks.append(block)
+        
+    html_blocks.append('</div>')
+    st.markdown("".join(html_blocks), unsafe_allow_html=True)
+    # ▲▲▲ 変更ここまで ▲▲▲
                 
     st.divider()
     
