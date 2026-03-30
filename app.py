@@ -784,7 +784,9 @@ def show_daily_report():
                         st.error(f"追加中にエラーが発生しました: {e}")
         
         st.divider()
-        st.markdown("##### ✍️ 上のリストにも作業が見つからない場合")
+        # ▼▼▼ 変更箇所：手入力欄の見出しを前半のスタイルに統一 ▼▼▼
+        st.markdown("<h4 style='font-size: clamp(0.9rem, 3.5vw, 1.2rem); margin-bottom: 0.5rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;'>✍️ 上のリストにも作業が見つからない場合</h4>", unsafe_allow_html=True)
+        # ▲▲▲ 変更ここまで ▲▲▲
         missing_work_val = submitted_report.get('漏れている作業', '') if is_target_submitted else ""
         missing_work = st.text_area(
             "機長がまだ入力していない作業などは、こちらに直接メモしてください", 
@@ -818,7 +820,9 @@ def show_daily_report():
         leave_time_str = st.selectbox("退勤時間", time_options, index=default_index)
         
         st.divider()
-        st.subheader("💡 報告事項")
+        # ▼▼▼ 変更箇所：報告事項の見出しを前半のスタイルに統一 ▼▼▼
+        st.markdown("<h3 style='font-size: clamp(1rem, 4vw, 1.4rem); margin-bottom: 0.5rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;' title='💡 報告事項'>💡 報告事項</h3>", unsafe_allow_html=True)
+        # ▲▲▲ 変更ここまで ▲▲▲
         
         mac_default = 0
         hiyari_default = 0
