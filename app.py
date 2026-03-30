@@ -3,13 +3,18 @@ import pandas as pd
 from datetime import datetime, time, timedelta, timezone
 from pathlib import Path
 import math
-import unicodedata # 追加：最強の文字照合用ライブラリ
+import unicodedata # 最強の文字照合用ライブラリ
 
 # Firebaseライブラリをインポート
 import firebase_admin
 from firebase_admin import credentials, firestore
 import json
 import os
+
+# 画像処理用ライブラリ（日報の写真アップロードで使用）
+import base64
+import io
+from PIL import Image
 
 # --- 共通テキストクリーンアップ関数（絶対マッチさせる用） ---
 def clean_text(text):
@@ -131,7 +136,6 @@ def init_firebase():
         else:
             return firestore.client()
     except Exception as e:
-        # ★ ここを修正：エラーの原因を画面に表示してストップする
         st.error(f"データベース接続エラー: {e}")
         st.info("💡 ヒント: Streamlit Cloudの「Advanced settings...」＞「Secrets」に貼り付けた鍵の形式が間違っている可能性があります。")
         return None
@@ -306,6 +310,7 @@ def process_form(is_edit_mode=False, default_data=None):
             
         other_workers = [name for name in base_workers if name != st.session_state.logged_in_user and name != "（自分の名前を選択してください）"]
 
+        # ★★★ 共同作業者の安全な処理 ★★★
         raw_co_workers = default_data.get('共同作業者', [])
         
         if isinstance(raw_co_workers, list):
@@ -320,7 +325,8 @@ def process_form(is_edit_mode=False, default_data=None):
         selected_co_workers = st.multiselect(
             "👤 一緒に作業したメンバー（任意・複数選択可）", 
             options=other_workers, 
-            default=valid_default_co_workers
+            default=valid_default_co_workers,
+            help="ここで選んだメンバーの「日報」にも、この作業履歴が自動的に追加されます！"
         )
 
         start_time_label = "開始時間/※セット時間は含まない" if process_name in setup_processes else "開始時間"
@@ -557,6 +563,219 @@ def show_bookmark_page(user_name):
         del st.session_state.just_logged_in
         st.rerun()
 
+# --- 日報機能の復活 ---
+def show_daily_report():
+    st.header("📝 日報（退勤報告）")
+    user = st.session_state.logged_in_user
+    
+    st.write(f"**{user}** さん、お疲れ様です！")
+    
+    with st.spinner("提出状況を確認しています..."):
+        reports_df = load_from_firestore(db, "daily_reports")
+        
+    today = datetime.now(timezone(timedelta(hours=9))).date()
+    
+    # ▼ 直近7日間のステータス表示
+    st.markdown("##### 📅 直近1週間の提出状況")
+    status_cols = st.columns(7)
+    
+    for i in range(7):
+        d = today - timedelta(days=6-i)
+        d_str = d.strftime('%Y-%m-%d')
+        day_label = ["月", "火", "水", "木", "金", "土", "日"][d.weekday()]
+        disp_date = f"{d.month}/{d.day}({day_label})"
+        
+        is_submitted = False
+        if not reports_df.empty and '提出者' in reports_df.columns and '日付' in reports_df.columns:
+            if not reports_df[(reports_df['提出者'] == user) & (reports_df['日付'] == d_str)].empty:
+                is_submitted = True
+                
+        with status_cols[i]:
+            if is_submitted:
+                st.success(f"{disp_date}  \n✅済")
+            elif d == today:
+                st.warning(f"{disp_date}  \n📝今日")
+            else:
+                st.info(f"{disp_date}  \n－")
+                
+    st.divider()
+    
+    # ▼ 対象日の選択
+    target_date = st.date_input(
+        "📅 提出（または確認）する対象日を選択してください",
+        value=today
+    )
+    target_date_str = target_date.strftime('%Y-%m-%d')
+
+    # --- 提出済みチェック ---
+    is_target_submitted = False
+    submitted_report = None
+    if not reports_df.empty and '提出者' in reports_df.columns and '日付' in reports_df.columns:
+        my_target_reports = reports_df[(reports_df['提出者'] == user) & (reports_df['日付'] == target_date_str)]
+        if not my_target_reports.empty:
+            is_target_submitted = True
+            submitted_report = my_target_reports.iloc[0].to_dict()
+            
+    if is_target_submitted:
+        leave_time = submitted_report.get("退勤時間", "不明")
+        st.success(f"🎉 **この日の日報はすでに提出済みです！** (退勤記録: {leave_time})")
+        with st.expander("提出した内容を確認する"):
+            st.write(f"- **疲れ具合:** {submitted_report.get('疲れ具合', '')}")
+            st.write(f"- **機械の調子:** {submitted_report.get('機械の調子', '')}")
+            st.write(f"- **ヒヤリハット:** {submitted_report.get('ヒヤリハット', '')}")
+            st.write(f"- **特記事項:** {submitted_report.get('特記事項', '')}")
+            if submitted_report.get('写真データ'):
+                st.write("- **添付写真:** あり（データベースに保存されています）")
+
+    with st.spinner(f"{target_date.strftime('%Y年%m月%d日')} の作業履歴をまとめています..."):
+        # 作業記録を取得
+        in_prog_df = load_from_firestore(db, "in_progress")
+        comp_df = load_from_firestore(db, "completed")
+        all_df = pd.concat([in_prog_df, comp_df], ignore_index=True)
+        
+    today_tasks = pd.DataFrame()
+    if not all_df.empty and '作成日時' in all_df.columns:
+        # 時間を日本時間に変換
+        all_df['作成日時_dt'] = pd.to_datetime(all_df['作成日時'], utc=True).dt.tz_convert('Asia/Tokyo')
+        
+        # 選択された対象日のデータに絞り込み
+        today_df = all_df[all_df['作成日時_dt'].dt.date == target_date]
+        
+        # 自分が入力者、または共同作業者に含まれているものを探す
+        def is_involved(row):
+            if row.get('入力者名') == user: return True
+            co_workers = row.get('共同作業者', [])
+            if isinstance(co_workers, list) and user in co_workers: return True
+            if isinstance(co_workers, str) and user in co_workers: return True
+            return False
+            
+        if not today_df.empty:
+            involved_mask = today_df.apply(is_involved, axis=1)
+            today_tasks = today_df[involved_mask].sort_values('作成日時_dt')
+
+    st.subheader(f"📋 {target_date.strftime('%m月%d日')} のあなたの作業履歴")
+    if today_tasks.empty:
+        st.info("この日の作業記録はまだありません。（※補助として参加した場合、機長が未入力の可能性があります）")
+    else:
+        for idx, row in today_tasks.iterrows():
+            product = row.get('製品名', '名称不明')
+            process = row.get('工程名', '工程不明')
+            detail = row.get('詳細', '')
+            qty = int(row.get('出来数', 0))
+            status = row.get('ステータス', '')
+            is_helper = row.get('入力者名') != user
+            
+            machine = row.get('使用機械', '')
+            rotation = int(row.get('回転数', 0)) if pd.notna(row.get('回転数', 0)) else 0
+            
+            helper_text = "（👤補助として参加）" if is_helper else ""
+            
+            extra_info = f"{qty:,}個 / 詳細: {detail} / 状態: {status}"
+            if machine:
+                extra_info += f" / 機械: {machine}"
+            if rotation > 0:
+                extra_info += f" / 回転数: {rotation:,}"
+                
+            st.markdown(f"- **{product}** ＞ {process} {helper_text}  \n  └ {extra_info}")
+
+    st.divider()
+    
+    with st.form("daily_report_form"):
+        st.subheader("⏰ 退勤時間の記録（残業申請）")
+        st.info("タイムカードの打刻と照合します。退勤（予定）時間を入力してください。")
+        
+        # 15分単位の選択肢を生成 (00:00 〜 23:45)
+        time_options = [f"{h:02d}:{m:02d}" for h in range(24) for m in (0, 15, 30, 45)]
+        
+        default_time_str = "17:30"
+        if is_target_submitted:
+            default_time_str = submitted_report.get("退勤時間", "17:30")
+        elif target_date == today:
+            now_dt = datetime.now(timezone(timedelta(hours=9)))
+            rounded_minute = (now_dt.minute // 15) * 15
+            default_time_str = f"{now_dt.hour:02d}:{rounded_minute:02d}"
+            
+        default_index = time_options.index(default_time_str) if default_time_str in time_options else 0
+        leave_time_str = st.selectbox("退勤時間（15分単位）", time_options, index=default_index)
+        
+        st.divider()
+        st.subheader("💡 コンディション・報告")
+        
+        cond_default = 1
+        mac_default = 0
+        hiyari_default = 0
+        report_text_val = ""
+        
+        if is_target_submitted:
+            cond_val = submitted_report.get('疲れ具合', '')
+            if "元気" in cond_val: cond_default = 0
+            elif "クタクタ" in cond_val: cond_default = 2
+            
+            mac_val = submitted_report.get('機械の調子', '')
+            if "ちょっと" in mac_val: mac_default = 1
+            elif "修理" in mac_val: mac_default = 2
+            elif "使っていない" in mac_val: mac_default = 3
+            
+            if "あり" in submitted_report.get('ヒヤリハット', ''): hiyari_default = 1
+            
+            report_text_val = submitted_report.get('特記事項', '')
+
+        col1, col2 = st.columns(2)
+        with col1:
+            condition = st.radio("疲れ具合は？", ["😊 元気", "😐 普通", "😫 クタクタ"], index=cond_default)
+        with col2:
+            machine_cond = st.radio("機械の調子はどうでしたか？", ["✨ 絶好調", "🔧 ちょっと変な音がした", "⚠️ 修理が必要", "➖ 機械は使っていない"], index=mac_default)
+            
+        hiyari = st.radio("ヒヤリハット・ミスはありましたか？", ["なし", "あり（下の特記事項に記入してください）"], index=hiyari_default)
+        
+        report_text = st.text_area("特記事項（トラブル、気づき、明日の申し送りなど）", value=report_text_val, height=100)
+        
+        st.info("現場の状況を伝えるため、任意で写真を追加できます。（1枚のみ）")
+        uploaded_photo = st.file_uploader("📷 写真を追加", type=["jpg", "jpeg", "png"])
+        
+        submit_btn_label = f"{target_date.strftime('%m/%d')} の日報を上書きして再提出" if is_target_submitted else f"{target_date.strftime('%m/%d')} の日報を送信する"
+        submitted = st.form_submit_button(submit_btn_label, type="primary", use_container_width=True)
+        
+        if submitted:
+            photo_base64 = ""
+            if uploaded_photo:
+                try:
+                    img = Image.open(uploaded_photo)
+                    if img.mode != 'RGB': img = img.convert('RGB')
+                    img.thumbnail((800, 800))
+                    buffered = io.BytesIO()
+                    img.save(buffered, format="JPEG", quality=70)
+                    photo_base64 = f"data:image/jpeg;base64,{base64.b64encode(buffered.getvalue()).decode()}"
+                except Exception as e:
+                    st.error(f"写真の処理に失敗しました。写真は保存されません: {e}")
+
+            report_data = {
+                "提出者": user,
+                "日付": target_date.strftime('%Y-%m-%d'),
+                "作成日時": firestore.SERVER_TIMESTAMP,
+                "退勤時間": leave_time_str, 
+                "疲れ具合": condition,
+                "機械の調子": machine_cond,
+                "ヒヤリハット": hiyari,
+                "特記事項": report_text,
+                "写真データ": photo_base64,
+                "関連タスク数": len(today_tasks)
+            }
+            
+            try:
+                if is_target_submitted:
+                    db.collection("daily_reports").document(submitted_report['id']).delete()
+                    
+                db.collection("daily_reports").add(report_data)
+                
+                msg_action = "再提出" if is_target_submitted else "送信"
+                st.session_state.success_msg = f"🎉 {target_date.strftime('%m/%d')} の日報を{msg_action}しました！お疲れ様でした！\n(退勤記録: {leave_time_str})"
+                
+                load_from_firestore.clear()
+                st.rerun()
+            except Exception as e:
+                st.error(f"日報の送信に失敗しました: {e}")
+
 def main_app():
     if 'product_to_select' in st.session_state:
         selected_product_name = st.session_state.product_to_select
@@ -594,14 +813,30 @@ def main_app():
     def clear_cache_and_rerun():
         load_from_firestore.clear()
         load_tasks_for_customer.clear()
-        load_csv_data.clear() # ← ★この1行を追加しました！
+        load_csv_data.clear() # ★キャッシュクリア処理を完全実装
         st.rerun()
         
     st.sidebar.button("データを更新", on_click=clear_cache_and_rerun, use_container_width=True)
     
+    # ★ 管理者向け（手動CSVアップロード）フェイルセーフ機能
+    with st.sidebar.expander("🛠️ 管理者メニュー (CSV手動更新)"):
+        st.info("朝の自動更新が失敗した場合などに、ここから今日の予定表を一時的に読み込ませることができます。")
+        uploaded_file = st.file_uploader("予定表 (schedule.csv) をアップロード", type=['csv'])
+        if uploaded_file is not None:
+            try:
+                df = pd.read_csv(uploaded_file, encoding="utf-8-sig")
+                st.session_state.manual_schedule_df = df
+                st.success("✅ 手動アップロードされたCSVを適用しました！")
+                if st.button("画面を更新して反映する", use_container_width=True):
+                    load_csv_data.clear()
+                    st.rerun()
+            except Exception as e:
+                st.error(f"読み込みエラー: {e}")
+
+    # ★ メニューに「日報（退勤報告）」を復活！
     main_view = st.radio(
         "メニューを選択", 
-        ["🔧 通常工程の記録", "📦 名入れ一括登録"], 
+        ["🔧 通常工程の記録", "📦 名入れ一括登録", "📝 日報（退勤報告）"], 
         horizontal=True,
         label_visibility="collapsed"
     )
@@ -1075,6 +1310,10 @@ def main_app():
                             st.session_state.success_msg = f"{len(checked_items)}件を「出荷待ち」に更新し、関連する作業記録を「完了」に移動しました。"
                             st.rerun()
 
+    # ★ メニューで「日報（退勤報告）」が選ばれた時の処理
+    elif main_view == "📝 日報（退勤報告）":
+        show_daily_report()
+
 # --- Streamlitのメイン処理の分岐 ---
 st.set_page_config(layout="wide")
 st.title("📘 製本記録アプリ")
@@ -1088,6 +1327,7 @@ def disable_buttons():
 if 'sub_view' not in st.session_state:
     st.session_state.sub_view = 'SELECT_PROCESS'
 
+# グローバルのデータベース接続（関数からも呼び出せるように）
 db = init_firebase()
 if not db:
     st.stop()
