@@ -673,9 +673,18 @@ def show_daily_report():
         # 作業記録を取得（★ 完了記録は直近30日分のみに絞り込んで節約！）
         in_prog_df = load_from_firestore(db, "in_progress")
         comp_df = load_from_firestore(db, "completed", days_limit=30)
+        
+        # ★ 追加: どっちのコレクションに保存されているかマーキング
+        if not in_prog_df.empty:
+            in_prog_df['_collection'] = "in_progress"
+        if not comp_df.empty:
+            comp_df['_collection'] = "completed"
+            
         all_df = pd.concat([in_prog_df, comp_df], ignore_index=True)
         
     today_tasks = pd.DataFrame()
+    other_tasks = pd.DataFrame() # ★ 追加: 自分が関わっていない他のタスク
+    
     if not all_df.empty and '作成日時' in all_df.columns:
         # 時間を日本時間に変換
         all_df['作成日時_dt'] = pd.to_datetime(all_df['作成日時'], utc=True).dt.tz_convert('Asia/Tokyo')
@@ -694,6 +703,7 @@ def show_daily_report():
         if not today_df.empty:
             involved_mask = today_df.apply(is_involved, axis=1)
             today_tasks = today_df[involved_mask].sort_values('作成日時_dt')
+            other_tasks = today_df[~involved_mask].sort_values('作成日時_dt') # ★ 追加: その日の自分以外の全作業
 
     st.subheader(f"📋 {target_date.strftime('%m月%d日')} のあなたの作業履歴")
     if today_tasks.empty:
@@ -719,6 +729,65 @@ def show_daily_report():
                 extra_info += f" / 回転数: {rotation:,}"
                 
             st.markdown(f"- **{product}** ＞ {process} {helper_text}  \n  └ {extra_info}")
+
+    # ▼▼▼ レベル2: 他の人の作業に後から自分を追加する機能 ▼▼▼
+    with st.expander("🔍 手伝ったのに上の履歴にない場合はここをクリック", expanded=False):
+        st.markdown("他の人が入力した作業記録から、自分が手伝った作業を見つけて「共同作業者」として名前を追加できます。")
+        
+        if other_tasks.empty:
+            st.info("※ この日に行われた他の作業記録は見つかりませんでした。（機長がまだ作業を入力していない可能性があります。その場合は下の「特記事項」にメモを残してください）")
+        else:
+            task_options = {}
+            for idx, row in other_tasks.iterrows():
+                # プルダウン用の分かりやすいテキストを作成
+                time_str = row['作成日時_dt'].strftime('%H:%M')
+                product = row.get('製品名', '名称不明')
+                process = row.get('工程名', '工程不明')
+                worker = row.get('入力者名', '不明')
+                machine = row.get('使用機械', '')
+                machine_str = f"[{machine}] " if machine else ""
+                qty = int(row.get('出来数', 0))
+                
+                label = f"{time_str} {worker}さんが入力: {product} ＞ {process} {machine_str}({qty}個)"
+                task_options[label] = row
+                
+            selected_task_label = st.selectbox("手伝った作業を選んでください", ["（ここから作業を選択）"] + list(task_options.keys()))
+            
+            if selected_task_label != "（ここから作業を選択）":
+                target_row = task_options[selected_task_label]
+                
+                if st.button("🙋‍♂️ この作業の「共同作業者」に自分を追加する", type="primary"):
+                    try:
+                        with st.spinner("データベースを更新中..."):
+                            # 既存の共同作業者リストを取得
+                            raw_co_workers = target_row.get('共同作業者', [])
+                            if isinstance(raw_co_workers, list):
+                                new_co_workers = list(raw_co_workers)
+                            elif isinstance(raw_co_workers, str):
+                                new_co_workers = [w.strip() for w in raw_co_workers.split(',')] if raw_co_workers else []
+                            else:
+                                new_co_workers = []
+                                
+                            # 自分をリストに追加
+                            if user not in new_co_workers:
+                                new_co_workers.append(user)
+                                
+                            # Firestoreの該当ドキュメントを更新
+                            collection_name = target_row.get('_collection')
+                            doc_id = target_row.get('id')
+                            
+                            if collection_name and doc_id:
+                                db.collection(collection_name).document(doc_id).update({
+                                    '共同作業者': new_co_workers
+                                })
+                                st.success("✅ 作業履歴にあなたを追加しました！画面を更新します。")
+                                load_from_firestore.clear() # キャッシュをクリアして最新を読み込ませる
+                                st.rerun()
+                            else:
+                                st.error("データエラーにより追加できませんでした。")
+                    except Exception as e:
+                        st.error(f"追加中にエラーが発生しました: {e}")
+    # ▲▲▲ レベル2 追加ここまで ▲▲▲
 
     st.divider()
     
@@ -770,19 +839,6 @@ def show_daily_report():
             
         hiyari = st.radio("ヒヤリハット・ミスはありましたか？", ["なし", "あり（下の特記事項に記入してください）"], index=hiyari_default)
         
-        # ▼▼▼ 追加：履歴にない作業を書くための専用欄 ▼▼▼
-        missing_work_val = ""
-        if is_target_submitted:
-            missing_work_val = submitted_report.get('漏れている作業', '')
-            
-        missing_work = st.text_area(
-            "📝 上の履歴にない作業（機長が未入力、または名前が漏れている場合）", 
-            value=missing_work_val, 
-            placeholder="例: 13:00〜14:00 〇〇の折り作業を手伝いました",
-            help="自分が手伝ったのに上のリストに出てこない作業があれば、ここにメモしてください。"
-        )
-        # ▲▲▲ 追加ここまで ▲▲▲
-
         report_text = st.text_area("特記事項（トラブル、気づき、明日の申し送りなど）", value=report_text_val, height=100)
         
         st.info("現場の状況を伝えるため、任意で写真を追加できます。（1枚のみ）")
@@ -812,7 +868,6 @@ def show_daily_report():
                 "疲れ具合": condition,
                 "機械の調子": machine_cond,
                 "ヒヤリハット": hiyari,
-                "漏れている作業": missing_work, # ← ★ここも追加（データベースに保存するため）
                 "特記事項": report_text,
                 "写真データ": photo_base64,
                 "関連タスク数": len(today_tasks)
