@@ -611,7 +611,11 @@ def show_bookmark_page(user_name):
 
 # --- 日報機能の復活 ---
 def show_daily_report():
-    st.header("📝 日報（退勤報告）")
+    # ▼▼▼ 変更箇所：日報のタイトルを絶対に1行にする ▼▼▼
+    # 変更前: st.header("📝 日報（退勤報告）")
+    st.markdown("<h2 style='font-size: clamp(1.2rem, 5vw, 2rem); margin-bottom: 1rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;' title='📝 日報（退勤報告）'>📝 日報（退勤報告）</h2>", unsafe_allow_html=True)
+    # ▲▲▲ 変更ここまで ▲▲▲
+    
     user = st.session_state.logged_in_user
     
     st.write(f"**{user}** さん、お疲れ様です！")
