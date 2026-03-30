@@ -552,14 +552,28 @@ def login_screen():
 
 def show_bookmark_page(user_name):
     st.success(f"**{user_name}** さんとしてログインしました！")
-    st.header("ブックマークをお願いします")
-    st.info(
-        "次回から、この名前選択画面をスキップして直接アプリを開くことができます。\n\n"
-        "お使いのブラウザの**「ブックマーク（お気に入りに追加）」**機能か、**「ホーム画面に追加」**機能を使って、**今表示されているこのページのURL**を保存してください。"
-    )
-    st.warning("ブックマークが完了したら、下のボタンを押して記録を開始してください。")
+    st.header("📌 ホーム画面への追加（重要）")
     
-    if st.button("記録を開始する", type="primary", use_container_width=True):
+    st.warning(
+        "スマホの場合、今のまま「ホーム画面に追加」をすると、次回またログイン画面に戻ってしまうことがあります。\n\n"
+        "確実にログイン状態を保存するために、**必ず以下の「青いボタン（専用リンク）」を一度タップ**してください。"
+    )
+    
+    import urllib.parse
+    safe_name = urllib.parse.quote(user_name)
+    link_url = f"?user={safe_name}"
+    
+    st.markdown(f"""
+        <a href="{link_url}" target="_self" style="display: block; text-align: center; background-color: #3b82f6; color: white; padding: 15px; text-decoration: none; border-radius: 10px; font-weight: bold; font-size: 18px; margin-bottom: 20px;">
+            👉 1. ここをタップしてアプリを開き直す
+        </a>
+    """, unsafe_allow_html=True)
+    
+    st.info("2. 画面が「記録の画面」に切り替わったら、ブラウザのメニューから **「ホーム画面に追加」** を行ってください。")
+    
+    st.divider()
+    
+    if st.button("すでに保存した / すぐに記録を開始する", use_container_width=True):
         del st.session_state.just_logged_in
         st.rerun()
 
@@ -1332,20 +1346,27 @@ db = init_firebase()
 if not db:
     st.stop()
 
+import urllib.parse
+
 params = st.query_params.to_dict()
 url_user = params.get("user")
 
 if 'logged_in_user' not in st.session_state:
-    if url_user and url_user in WORKER_NAMES:
-        st.session_state.logged_in_user = url_user
-        st.session_state.user_location = WORKER_TO_LOCATION.get(url_user, "すべて")
+    if url_user:
+        # URLの文字化け（エンコード）を解除し、スペースの揺れを無くして確実にマッチさせる
+        clean_url_user = urllib.parse.unquote(url_user).replace(" ", "").replace("　", "").replace("+", "")
+        for name in WORKER_NAMES:
+            if name.replace(" ", "").replace("　", "") == clean_url_user:
+                st.session_state.logged_in_user = name
+                st.session_state.user_location = WORKER_TO_LOCATION.get(name, "すべて")
+                break
 
 if 'logged_in_user' in st.session_state:
     if st.session_state.get("just_logged_in"):
-        del st.session_state.just_logged_in
         st.query_params.user = st.session_state.logged_in_user
         show_bookmark_page(st.session_state.logged_in_user)
     else:
+        st.query_params.user = st.session_state.logged_in_user
         main_app()
 else:
     login_screen()
