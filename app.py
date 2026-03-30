@@ -579,12 +579,13 @@ def show_bookmark_page(user_name):
     link_url = f"?uid={user_id}"
     
     st.markdown(f"""
-        <a href="{link_url}" target="_self" style="display: block; text-align: center; background-color: #3b82f6; color: white; padding: 15px; text-decoration: none; border-radius: 10px; font-weight: bold; font-size: 18px; margin-bottom: 20px;">
-            👉 1. ここをタップしてアプリを開き直す
+        <a href="{link_url}" target="_blank" rel="noopener noreferrer" style="display: block; text-align: center; background-color: #3b82f6; color: white; padding: 15px; text-decoration: none; border-radius: 10px; font-weight: bold; font-size: 18px; margin-bottom: 20px; box-shadow: 0 4px 6px rgba(0,0,0,0.2);">
+            👉 1. ここをタップして【新しいタブ】で開き直す
         </a>
     """, unsafe_allow_html=True)
     
-    st.info("2. 画面が「記録の画面」に切り替わったら、ブラウザのメニューから **「ホーム画面に追加」** を行ってください。")
+    st.info("2. 新しい画面（タブ）が開いたら、その画面でブラウザの下のメニュー「↑」から **「ホーム画面に追加」** を行ってください。")
+    st.caption("※ ホーム画面に追加できたら、今開いている古い画面は閉じてしまって大丈夫です。")
     
     st.divider()
     
