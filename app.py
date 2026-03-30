@@ -217,8 +217,13 @@ def process_form(is_edit_mode=False, default_data=None):
     if default_data is None: default_data = {}
     product_name = default_data.get('製品名', st.session_state.get('selected_product', ''))
     process_name = default_data.get('工程名', st.session_state.get('selected_process', ''))
-    st.header(f"Step 2: 「{product_name}」の作業内容を記録")
-    st.subheader(f"工程: **{process_name}**")
+    
+    # ▼▼▼ 変更箇所1：Step2の見出しを自動調整に ▼▼▼
+    # 変更前: st.header(f"Step 2: 「{product_name}」の作業内容を記録")
+    # 変更前: st.subheader(f"工程: **{process_name}**")
+    st.markdown(f"<h2 style='font-size: clamp(1.1rem, 4vw, 1.8rem); margin-bottom: 0;'>Step 2: 「{product_name}」の作業内容を記録</h2>", unsafe_allow_html=True)
+    st.markdown(f"<h3 style='font-size: clamp(1rem, 3.5vw, 1.4rem); color: #555; margin-top: 5px;'>工程: <b>{process_name}</b></h3>", unsafe_allow_html=True)
+    # ▲▲▲ 変更ここまで ▲▲▲
     
     # ▼▼▼ 最強の照合ロジック（全角半角・スペース無視） ▼▼▼
     schedule_df = load_csv_data(SCHEDULE_FILE)
@@ -1018,7 +1023,10 @@ def main_app():
             
             col_form, col_list = st.columns(2)
             with col_form:
-                st.subheader(f"Step 1: 新規工程を記録（{selected_location}）")
+                # ▼▼▼ 変更箇所2：Step1の見出しを自動調整に ▼▼▼
+                # 変更前: st.subheader(f"Step 1: 新規工程を記録（{selected_location}）")
+                st.markdown(f"<h3 style='font-size: clamp(1.1rem, 4vw, 1.5rem);'>Step 1: 新規工程を記録（{selected_location}）</h3>", unsafe_allow_html=True)
+                # ▲▲▲ 変更ここまで ▲▲▲
                 
                 filtered_schedule_df = schedule_df.copy()
                 if selected_location != "すべて":
@@ -1117,7 +1125,10 @@ def main_app():
                             st.rerun()
 
             with col_list:
-                st.subheader(f"進行中の作業一覧（{selected_location}）")
+                # ▼▼▼ 変更箇所3：一覧の見出しを自動調整に ▼▼▼
+                # 変更前: st.subheader(f"進行中の作業一覧（{selected_location}）")
+                st.markdown(f"<h3 style='font-size: clamp(1.1rem, 4vw, 1.5rem);'>進行中の作業一覧（{selected_location}）</h3>", unsafe_allow_html=True)
+                # ▲▲▲ 変更ここまで ▲▲▲
                 
                 view_filter = st.radio(
                     "表示フィルター",
@@ -1431,7 +1442,11 @@ def main_app():
 
 # --- Streamlitのメイン処理の分岐 ---
 st.set_page_config(layout="wide")
-st.title("📘 製本記録アプリ")
+
+# ▼▼▼ 変更箇所4：アプリの大タイトルを自動調整に ▼▼▼
+# 変更前: st.title("📘 製本記録アプリ")
+st.markdown("<h1 style='font-size: clamp(1.5rem, 6vw, 2.5rem); padding-top: 1rem;'>📘 製本記録アプリ</h1>", unsafe_allow_html=True)
+# ▲▲▲ 変更ここまで ▲▲▲
 
 if 'submit_disabled' not in st.session_state:
     st.session_state.submit_disabled = False
