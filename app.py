@@ -131,6 +131,9 @@ def init_firebase():
         else:
             return firestore.client()
     except Exception as e:
+        # ★ ここを修正：エラーの原因を画面に表示してストップする
+        st.error(f"データベース接続エラー: {e}")
+        st.info("💡 ヒント: Streamlit Cloudの「Advanced settings...」＞「Secrets」に貼り付けた鍵の形式が間違っている可能性があります。")
         return None
 
 @st.cache_data(ttl=600)
