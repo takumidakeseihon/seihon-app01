@@ -662,7 +662,8 @@ def show_daily_report():
         leave_time = submitted_report.get("退勤時間", "不明")
         st.success(f"🎉 **この日の日報はすでに提出済みです！** (退勤記録: {leave_time})")
         with st.expander("提出した内容を確認する"):
-            st.write(f"- **疲れ具合:** {submitted_report.get('疲れ具合', '')}")
+            if submitted_report.get('漏れている作業'):
+                st.write(f"- **追加申告した作業:** {submitted_report.get('漏れている作業', '')}")
             st.write(f"- **機械の調子:** {submitted_report.get('機械の調子', '')}")
             st.write(f"- **ヒヤリハット:** {submitted_report.get('ヒヤリハット', '')}")
             st.write(f"- **特記事項:** {submitted_report.get('特記事項', '')}")
@@ -787,6 +788,17 @@ def show_daily_report():
                                 st.error("データエラーにより追加できませんでした。")
                     except Exception as e:
                         st.error(f"追加中にエラーが発生しました: {e}")
+        
+        # ▼ 追加: どうしても見つからない時の手入力欄（レベル1）
+        st.divider()
+        st.markdown("##### ✍️ 上のリストにも作業が見つからない場合")
+        missing_work_val = submitted_report.get('漏れている作業', '') if is_target_submitted else ""
+        missing_work = st.text_area(
+            "機長がまだ入力していない作業などは、こちらに直接メモしてください", 
+            value=missing_work_val, 
+            placeholder="例: 13:00〜14:00 〇〇の折り作業を手伝いました",
+            height=80
+        )
     # ▲▲▲ レベル2 追加ここまで ▲▲▲
 
     st.divider()
@@ -810,18 +822,13 @@ def show_daily_report():
         leave_time_str = st.selectbox("退勤時間（15分単位）", time_options, index=default_index)
         
         st.divider()
-        st.subheader("💡 コンディション・報告")
+        st.subheader("💡 報告事項")
         
-        cond_default = 1
         mac_default = 0
         hiyari_default = 0
         report_text_val = ""
         
         if is_target_submitted:
-            cond_val = submitted_report.get('疲れ具合', '')
-            if "元気" in cond_val: cond_default = 0
-            elif "クタクタ" in cond_val: cond_default = 2
-            
             mac_val = submitted_report.get('機械の調子', '')
             if "ちょっと" in mac_val: mac_default = 1
             elif "修理" in mac_val: mac_default = 2
@@ -831,11 +838,8 @@ def show_daily_report():
             
             report_text_val = submitted_report.get('特記事項', '')
 
-        col1, col2 = st.columns(2)
-        with col1:
-            condition = st.radio("疲れ具合は？", ["😊 元気", "😐 普通", "😫 クタクタ"], index=cond_default)
-        with col2:
-            machine_cond = st.radio("機械の調子はどうでしたか？", ["✨ 絶好調", "🔧 ちょっと変な音がした", "⚠️ 修理が必要", "➖ 機械は使っていない"], index=mac_default)
+        # 疲れ具合の項目を削除し、機械の調子のみ表示
+        machine_cond = st.radio("機械の調子はどうでしたか？", ["✨ 絶好調", "🔧 ちょっと変な音がした", "⚠️ 修理が必要", "➖ 機械は使っていない"], index=mac_default)
             
         hiyari = st.radio("ヒヤリハット・ミスはありましたか？", ["なし", "あり（下の特記事項に記入してください）"], index=hiyari_default)
         
@@ -865,8 +869,8 @@ def show_daily_report():
                 "日付": target_date.strftime('%Y-%m-%d'),
                 "作成日時": firestore.SERVER_TIMESTAMP,
                 "退勤時間": leave_time_str, 
-                "疲れ具合": condition,
-                "機械の調子": machine_cond,
+                "漏れている作業": missing_work, # ← 手入力のメモを保存
+                "機械の調子": machine_cond,     # ← 疲れ具合は保存対象から除外
                 "ヒヤリハット": hiyari,
                 "特記事項": report_text,
                 "写真データ": photo_base64,
