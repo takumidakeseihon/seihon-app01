@@ -770,6 +770,19 @@ def show_daily_report():
             
         hiyari = st.radio("ヒヤリハット・ミスはありましたか？", ["なし", "あり（下の特記事項に記入してください）"], index=hiyari_default)
         
+        # ▼▼▼ 追加：履歴にない作業を書くための専用欄 ▼▼▼
+        missing_work_val = ""
+        if is_target_submitted:
+            missing_work_val = submitted_report.get('漏れている作業', '')
+            
+        missing_work = st.text_area(
+            "📝 上の履歴にない作業（機長が未入力、または名前が漏れている場合）", 
+            value=missing_work_val, 
+            placeholder="例: 13:00〜14:00 〇〇の折り作業を手伝いました",
+            help="自分が手伝ったのに上のリストに出てこない作業があれば、ここにメモしてください。"
+        )
+        # ▲▲▲ 追加ここまで ▲▲▲
+
         report_text = st.text_area("特記事項（トラブル、気づき、明日の申し送りなど）", value=report_text_val, height=100)
         
         st.info("現場の状況を伝えるため、任意で写真を追加できます。（1枚のみ）")
@@ -799,6 +812,7 @@ def show_daily_report():
                 "疲れ具合": condition,
                 "機械の調子": machine_cond,
                 "ヒヤリハット": hiyari,
+                "漏れている作業": missing_work, # ← ★ここも追加（データベースに保存するため）
                 "特記事項": report_text,
                 "写真データ": photo_base64,
                 "関連タスク数": len(today_tasks)
