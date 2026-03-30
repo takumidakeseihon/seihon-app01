@@ -658,9 +658,9 @@ def show_daily_report():
                 st.write("- **添付写真:** あり（データベースに保存されています）")
 
     with st.spinner(f"{target_date.strftime('%Y年%m月%d日')} の作業履歴をまとめています..."):
-        # 作業記録を取得
+        # 作業記録を取得（★ 完了記録は直近30日分のみに絞り込んで節約！）
         in_prog_df = load_from_firestore(db, "in_progress")
-        comp_df = load_from_firestore(db, "completed")
+        comp_df = load_from_firestore(db, "completed", days_limit=30)
         all_df = pd.concat([in_prog_df, comp_df], ignore_index=True)
         
     today_tasks = pd.DataFrame()
