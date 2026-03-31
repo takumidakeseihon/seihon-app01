@@ -589,7 +589,7 @@ def show_bookmark_page(user_name):
         del st.session_state.just_logged_in
         st.rerun()
 
-# --- 日報機能の復活 ---
+# --- 日報機能 ---
 def show_daily_report():
     st.markdown("<h2 style='font-size: clamp(1.2rem, 5vw, 2rem); margin-bottom: 1rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;' title='📝 日報（退勤報告）'>📝 日報（退勤報告）</h2>", unsafe_allow_html=True)
     
@@ -876,6 +876,116 @@ def show_daily_report():
             except Exception as e:
                 st.error(f"日報の送信に失敗しました: {e}")
 
+# --- 追加：管理者用ダッシュボード（日報確認機能） ---
+def show_admin_dashboard():
+    st.markdown("<h2 style='font-size: clamp(1.2rem, 5vw, 2rem); margin-bottom: 1rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;' title='👑 管理者ダッシュボード'>👑 管理者ダッシュボード</h2>", unsafe_allow_html=True)
+    
+    # パスワード認証機能
+    if not st.session_state.get('admin_authenticated', False):
+        st.info("この画面は日報を確認する管理者専用の画面です。パスワードを入力してください。")
+        password = st.text_input("パスワード", type="password")
+        
+        # Secretsにパスワードが設定されていればそれを、なければ初期パスワード「admin1234」を使用します
+        correct_password = st.secrets.get("ADMIN_PASSWORD", "admin1234") 
+        
+        if st.button("ログイン", type="primary"):
+            if password == correct_password:
+                st.session_state.admin_authenticated = True
+                st.rerun()
+            else:
+                st.error("❌ パスワードが違います。")
+        return
+
+    # === ここから下は認証に成功した管理者のみが見れる画面 ===
+    st.success("✅ 管理者としてログイン中")
+    if st.button("管理者画面からログアウト", size="small"):
+        st.session_state.admin_authenticated = False
+        st.rerun()
+        
+    st.divider()
+    
+    col1, col2 = st.columns(2)
+    with col1:
+        target_date = st.date_input("📅 表示する日付", value=datetime.now(timezone(timedelta(hours=9))).date())
+    with col2:
+        location_filter = st.radio("🏢 表示する拠点", ["すべて", "旭川", "札幌"], horizontal=True)
+        
+    with st.spinner("データベースから日報を取得中..."):
+        reports_df = load_from_firestore(db, "daily_reports")
+        
+    if reports_df.empty:
+        st.warning("現在、システム上に日報データが1件もありません。")
+        return
+        
+    # 日付でフィルタリング
+    target_date_str = target_date.strftime('%Y-%m-%d')
+    filtered_df = reports_df[reports_df['日付'] == target_date_str].copy()
+    
+    if filtered_df.empty:
+        st.info(f"{target_date_str} の日報はまだ誰からも提出されていません。")
+        return
+        
+    # 拠点でフィルタリング（提出者の名前から逆引き）
+    filtered_df['拠点'] = filtered_df['提出者'].map(WORKER_TO_LOCATION).fillna("未設定")
+    if location_filter != "すべて":
+        filtered_df = filtered_df[filtered_df['拠点'] == location_filter]
+        
+    if filtered_df.empty:
+        st.info(f"{location_filter}拠点の {target_date_str} の日報はまだ提出されていません。")
+        return
+        
+    st.subheader(f"📊 提出済み日報 ({len(filtered_df)}件)")
+    
+    # 1. 画面表示用のシンプルな表
+    display_cols = ['提出者', '拠点', '退勤時間', '機械の調子', 'ヒヤリハット']
+    existing_cols = [c for c in display_cols if c in filtered_df.columns]
+    st.dataframe(filtered_df[existing_cols], use_container_width=True)
+    
+    # 2. CSVダウンロード機能（全データ入り）
+    export_cols = ['日付', '提出者', '拠点', '退勤時間', '機械の調子', 'ヒヤリハット', '漏れている作業', '特記事項']
+    export_existing_cols = [c for c in export_cols if c in filtered_df.columns]
+    csv_data = filtered_df[export_existing_cols].to_csv(index=False, encoding='utf-8-sig').encode('utf-8-sig')
+    
+    st.download_button(
+        label="📥 表示中の日報をCSV（エクセル用）でダウンロード",
+        data=csv_data,
+        file_name=f"日報一覧_{target_date_str}_{location_filter}.csv",
+        mime="text/csv",
+        type="primary",
+        use_container_width=True
+    )
+    
+    st.divider()
+    st.subheader("📝 詳細な報告内容（タップで展開）")
+    
+    for idx, row in filtered_df.iterrows():
+        worker = row.get('提出者', '不明')
+        loc = row.get('拠点', '')
+        leave_time = row.get('退勤時間', '')
+        
+        with st.expander(f"👤 {worker} ({loc}) - 退勤: {leave_time}"):
+            st.markdown(f"**🔧 機械の調子:** {row.get('機械の調子', '未記入')}")
+            
+            hiyari = row.get('ヒヤリハット', '未記入')
+            if "あり" in hiyari:
+                st.markdown(f"**⚠️ ヒヤリハット:** <span style='color:red;'>{hiyari}</span>", unsafe_allow_html=True)
+            else:
+                st.markdown(f"**⚠️ ヒヤリハット:** {hiyari}")
+            
+            missing = row.get('漏れている作業', '')
+            if missing:
+                st.markdown(f"**✍️ 追加申告作業:**\n> {missing}")
+                
+            note = row.get('特記事項', '')
+            if note:
+                st.markdown(f"**💡 特記事項:**\n> {note}")
+            else:
+                st.markdown("**💡 特記事項:** なし")
+                
+            photo = row.get('写真データ', '')
+            if photo and isinstance(photo, str) and photo.startswith('data:image'):
+                st.image(photo, caption=f"{worker}さんからの添付写真", use_container_width=True)
+
 # --- 追加：Step1のフラグメント化（ロードのチラつき防止） ---
 @st.fragment
 def render_step1_fragment(schedule_df, display_df, selected_location, product_to_location):
@@ -890,7 +1000,6 @@ def render_step1_fragment(schedule_df, display_df, selected_location, product_to
     if not filtered_schedule_df.empty and '得意先名' in filtered_schedule_df.columns:
         customer_names = sorted(filtered_schedule_df['得意先名'].dropna().unique().tolist())
     
-    # ▼ 得意先を選ぶと、ここから下だけが更新される（画面全体はチカチカしない！）
     selected_customer = st.selectbox("得意先名で絞り込み", ["すべての得意先"] + customer_names, key="customer_choice")
     
     with st.form(key="selection_form"):
@@ -976,7 +1085,6 @@ def render_step1_fragment(schedule_df, display_df, selected_location, product_to
                 st.session_state.selected_product = product_name
                 st.session_state.selected_process = process_name
                 st.session_state.sub_view = 'INPUT_FORM'
-                # 入力開始ボタンを押した時は画面全体を遷移させる
                 st.rerun()
 
 def main_app():
@@ -1035,16 +1143,16 @@ def main_app():
             except Exception as e:
                 st.error(f"読み込みエラー: {e}")
 
+    # ▼ 変更ポイント：メニューの選択肢に「👑 管理者画面」を追加
     main_view = st.radio(
         "メニューを選択", 
-        ["🔧 通常工程の記録", "📦 名入れ一括登録", "📝 日報（退勤報告）"], 
+        ["🔧 通常工程の記録", "📦 名入れ一括登録", "📝 日報（退勤報告）", "👑 管理者画面"], 
         horizontal=True,
         label_visibility="collapsed"
     )
     st.divider()
     
     if main_view == "🔧 通常工程の記録":
-        # ▼ スピナーを外してロードのチカチカを防止
         in_progress_df = load_from_firestore(db, "in_progress")
         st.session_state.in_progress_df = in_progress_df
 
@@ -1100,7 +1208,6 @@ def main_app():
             
             col_form, col_list = st.columns(2)
             with col_form:
-                # ▼ 変更: 入力フォームをフラグメント（部分更新）として呼び出す
                 render_step1_fragment(schedule_df, display_df, selected_location, product_to_location)
 
             with col_list:
@@ -1414,10 +1521,20 @@ def main_app():
 
     elif main_view == "📝 日報（退勤報告）":
         show_daily_report()
+        
+    # ▼ 変更ポイント：新しい分岐処理の追加
+    elif main_view == "👑 管理者画面":
+        show_admin_dashboard()
 
 st.set_page_config(layout="wide")
 
 st.markdown("<h1 style='font-size: clamp(1.2rem, 5vw, 2.5rem); padding-top: 1rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;'>📘 製本記録アプリ</h1>", unsafe_allow_html=True)
+
+if 'submit_disabled' not in st.session_state:
+    st.session_state.submit_disabled = False
+
+def disable_buttons():
+    st.session_state.submit_disabled = True
 
 if 'sub_view' not in st.session_state:
     st.session_state.sub_view = 'SELECT_PROCESS'
