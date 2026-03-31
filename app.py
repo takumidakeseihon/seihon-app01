@@ -914,29 +914,45 @@ def show_admin_dashboard():
     with st.spinner("データベースから日報を取得中..."):
         reports_df = load_from_firestore(db, "daily_reports")
         
-    if reports_df.empty:
-        st.warning("現在、システム上に日報データが1件もありません。")
-        return
+    # 拠点に応じた対象メンバーのリストを取得
+    if location_filter == "旭川":
+        target_members = ASAHIKAWA_MEMBERS
+    elif location_filter == "札幌":
+        target_members = SAPPORO_MEMBERS
+    else:
+        target_members = WORKER_NAMES
         
-    # 日付でフィルタリング
     target_date_str = target_date.strftime('%Y-%m-%d')
-    filtered_df = reports_df[reports_df['日付'] == target_date_str].copy()
     
-    if filtered_df.empty:
-        st.info(f"{target_date_str} の日報はまだ誰からも提出されていません。")
-        return
+    # 提出済みデータの抽出
+    filtered_df = pd.DataFrame()
+    if not reports_df.empty:
+        filtered_df = reports_df[reports_df['日付'] == target_date_str].copy()
+        if not filtered_df.empty:
+            filtered_df['拠点'] = filtered_df['提出者'].map(WORKER_TO_LOCATION).fillna("未設定")
+            if location_filter != "すべて":
+                filtered_df = filtered_df[filtered_df['拠点'] == location_filter]
+
+    # 提出状況の集計
+    submitted_members = filtered_df['提出者'].tolist() if not filtered_df.empty else []
+    missing_members = [m for m in target_members if m not in submitted_members]
+    
+    # ▼▼▼ 新機能：未提出者の表示 ▼▼▼
+    st.markdown(f"<h3 style='font-size: clamp(1rem, 4vw, 1.4rem);'>🚨 未提出者 ({len(missing_members)}名)</h3>", unsafe_allow_html=True)
+    if missing_members:
+        st.error("、 ".join(missing_members))
+    else:
+        st.success("対象拠点の全員が提出済みです！素晴らしい！🎉")
+    # ▲▲▲ 新機能ここまで ▲▲▲
         
-    # 拠点でフィルタリング（提出者の名前から逆引き）
-    filtered_df['拠点'] = filtered_df['提出者'].map(WORKER_TO_LOCATION).fillna("未設定")
-    if location_filter != "すべて":
-        filtered_df = filtered_df[filtered_df['拠点'] == location_filter]
+    st.divider()
         
+    st.markdown(f"<h3 style='font-size: clamp(1rem, 4vw, 1.4rem);'>📊 提出済み日報 ({len(submitted_members)}件)</h3>", unsafe_allow_html=True)
+    
     if filtered_df.empty:
         st.info(f"{location_filter}拠点の {target_date_str} の日報はまだ提出されていません。")
         return
         
-    st.subheader(f"📊 提出済み日報 ({len(filtered_df)}件)")
-    
     # 1. 画面表示用のシンプルな表
     display_cols = ['提出者', '拠点', '退勤時間', '機械の調子', 'ヒヤリハット']
     existing_cols = [c for c in display_cols if c in filtered_df.columns]
