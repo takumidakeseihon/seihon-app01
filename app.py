@@ -898,7 +898,8 @@ def show_admin_dashboard():
 
     # === ここから下は認証に成功した管理者のみが見れる画面 ===
     st.success("✅ 管理者としてログイン中")
-    if st.button("管理者画面からログアウト", size="small"):
+    # ▼ エラーの原因だった size="small" を削除しました
+    if st.button("管理者画面からログアウト"):
         st.session_state.admin_authenticated = False
         st.rerun()
         
