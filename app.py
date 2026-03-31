@@ -70,7 +70,7 @@ WORKER_NAMES = [
     "立川　悠依", 
     "家常 貴史", "藤田 祐司", "田中 二郎", "内田 進", "若杉 瑞樹", "小柄 浩二",
     "蓬畑 皓一", "藤井 翔太", "佐々木 輝", "ノヴィ アナ", "カロマー ユニシャ",
-    "モニカ ジュリヤニ", "岳 司郎",
+    "モニカ ジュリヤニ", "岳 司郎", "福田 準也",
 ]
 
 # 従業員と拠点の対応表
@@ -84,7 +84,7 @@ ASAHIKAWA_MEMBERS = [
 SAPPORO_MEMBERS = [
     "家常 貴史", "藤田 祐司", "田中 二郎", "内田 進", "若杉 瑞樹", "小柄 浩二",
     "蓬畑 皓一", "藤井 翔太", "佐々木 輝", "ノヴィ アナ", "カロマー ユニシャ",
-    "モニカ ジュリヤニ", "岳 司郎",
+    "モニカ ジュリヤニ", "岳 司郎", "福田 準也",
 ]
 
 WORKER_TO_LOCATION = {name: "旭川" for name in ASAHIKAWA_MEMBERS}
@@ -102,7 +102,7 @@ WORKER_ID_MAP = {
     "家常 貴史": "S01", "藤田 祐司": "S02", "田中 二郎": "S03", "内田 進": "S04",
     "若杉 瑞樹": "S05", "小柄 浩二": "S06", "蓬畑 皓一": "S07", "藤井 翔太": "S08",
     "佐々木 輝": "S09", "ノヴィ アナ": "S10", "カロマー ユニシャ": "S11",
-    "モニカ ジュリヤニ": "S12", "岳 司郎": "S13"
+    "モニカ ジュリヤニ": "S12", "岳 司郎": "S13", "福田 準也": "S14"
 }
 ID_TO_WORKER = {v: k for k, v in WORKER_ID_MAP.items()}
 
@@ -882,8 +882,11 @@ def show_daily_report():
 def show_admin_dashboard():
     st.markdown("<h2 style='font-size: clamp(1.2rem, 5vw, 2rem); margin-bottom: 1rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;' title='👑 管理者ダッシュボード'>👑 管理者ダッシュボード</h2>", unsafe_allow_html=True)
     
-    # パスワード認証機能
-    if not st.session_state.get('admin_authenticated', False):
+    current_user = st.session_state.get('logged_in_user', '')
+    is_admin = current_user in ["岳　匠", "福田 準也"]
+    
+    # パスワード認証機能 (指定された管理者はパスワードを免除)
+    if not st.session_state.get('admin_authenticated', False) and not is_admin:
         st.info("この画面は日報を確認する管理者専用の画面です。パスワードを入力してください。")
         password = st.text_input("パスワード", type="password")
         
@@ -899,10 +902,13 @@ def show_admin_dashboard():
         return
 
     # === ここから下は認証に成功した管理者のみが見れる画面 ===
-    st.success("✅ 管理者としてログイン中")
-    if st.button("管理者画面からログアウト"):
-        st.session_state.admin_authenticated = False
-        st.rerun()
+    if is_admin:
+        st.success(f"✅ 管理者（{current_user}）としてログイン中")
+    else:
+        st.success("✅ 管理者としてログイン中")
+        if st.button("管理者画面からログアウト"):
+            st.session_state.admin_authenticated = False
+            st.rerun()
         
     st.divider()
     
@@ -910,7 +916,14 @@ def show_admin_dashboard():
     with col1:
         target_date = st.date_input("📅 表示する日付", value=datetime.now(timezone(timedelta(hours=9))).date())
     with col2:
-        location_filter = st.radio("🏢 表示する拠点", ["すべて", "旭川", "札幌"], horizontal=True)
+        # 管理者の場合は初期選択を自分の拠点にする
+        default_loc = "すべて"
+        if current_user == "岳　匠": default_loc = "旭川"
+        elif current_user == "福田 準也": default_loc = "札幌"
+        
+        loc_options = ["すべて", "旭川", "札幌"]
+        default_idx = loc_options.index(default_loc)
+        location_filter = st.radio("🏢 表示する拠点", loc_options, index=default_idx, horizontal=True)
         
     with st.spinner("データベースから日報と作業記録を取得中..."):
         reports_df = load_from_firestore(db, "daily_reports")
