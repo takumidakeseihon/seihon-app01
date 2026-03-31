@@ -911,8 +911,19 @@ def show_admin_dashboard():
     with col2:
         location_filter = st.radio("🏢 表示する拠点", ["すべて", "旭川", "札幌"], horizontal=True)
         
-    with st.spinner("データベースから日報を取得中..."):
+    with st.spinner("データベースから日報と作業記録を取得中..."):
         reports_df = load_from_firestore(db, "daily_reports")
+        
+        # ▼▼▼ 追加：その日の「全作業記録」も取得しておく ▼▼▼
+        in_prog_df = load_from_firestore(db, "in_progress")
+        comp_df = load_from_firestore(db, "completed", days_limit=30)
+        all_tasks_df = pd.concat([in_prog_df, comp_df], ignore_index=True)
+        today_tasks_df = pd.DataFrame()
+        
+        if not all_tasks_df.empty and '作成日時' in all_tasks_df.columns:
+            all_tasks_df['作成日時_dt'] = pd.to_datetime(all_tasks_df['作成日時'], utc=True).dt.tz_convert('Asia/Tokyo')
+            today_tasks_df = all_tasks_df[all_tasks_df['作成日時_dt'].dt.date == target_date]
+        # ▲▲▲ 追加ここまで ▲▲▲
         
     # 拠点に応じた対象メンバーのリストを取得
     if location_filter == "旭川":
@@ -933,17 +944,36 @@ def show_admin_dashboard():
             if location_filter != "すべて":
                 filtered_df = filtered_df[filtered_df['拠点'] == location_filter]
 
-    # 提出状況の集計
+    # ▼▼▼ 変更：休みの人を除外！「作業したのに未提出の人」だけを抽出 ▼▼▼
+    worked_members = set() # その日システムに名前が載った人のリスト
+    if not today_tasks_df.empty:
+        for _, row in today_tasks_df.iterrows():
+            worker = row.get('入力者名')
+            if pd.notna(worker) and worker in target_members:
+                worked_members.add(worker)
+            
+            # 共同作業者（補助）もカウント
+            co_workers = row.get('共同作業者', [])
+            if isinstance(co_workers, list):
+                for cw in co_workers:
+                    if cw in target_members: worked_members.add(cw)
+            elif isinstance(co_workers, str) and co_workers:
+                for cw in [w.strip() for w in co_workers.split(',')]:
+                    if cw in target_members: worked_members.add(cw)
+
     submitted_members = filtered_df['提出者'].tolist() if not filtered_df.empty else []
-    missing_members = [m for m in target_members if m not in submitted_members]
+    missing_members = sorted(list(worked_members - set(submitted_members))) # 作業した人 - 提出した人 = 出し忘れ！
+    # ▲▲▲ 変更ここまで ▲▲▲
     
-    # ▼▼▼ 新機能：未提出者の表示 ▼▼▼
     st.markdown(f"<h3 style='font-size: clamp(1rem, 4vw, 1.4rem);'>🚨 未提出者 ({len(missing_members)}名)</h3>", unsafe_allow_html=True)
     if missing_members:
         st.error("、 ".join(missing_members))
+        st.caption("※今日システムに作業記録があるにも関わらず、日報が未提出の方です。（休みの人は表示されません）")
     else:
-        st.success("対象拠点の全員が提出済みです！素晴らしい！🎉")
-    # ▲▲▲ 新機能ここまで ▲▲▲
+        if worked_members:
+            st.success("今日作業記録がある方は全員提出済みです！素晴らしい！🎉")
+        else:
+            st.info("この日の作業記録はまだありません。")
         
     st.divider()
         
@@ -981,6 +1011,38 @@ def show_admin_dashboard():
         leave_time = row.get('退勤時間', '')
         
         with st.expander(f"👤 {worker} ({loc}) - 退勤: {leave_time}"):
+            # ▼▼▼ 追加：展開した時に「今日やった作業」をタイムライン表示 ▼▼▼
+            worker_tasks = pd.DataFrame()
+            if not today_tasks_df.empty:
+                def is_worker_involved(task_row):
+                    if task_row.get('入力者名') == worker: return True
+                    cw = task_row.get('共同作業者', [])
+                    if isinstance(cw, list) and worker in cw: return True
+                    if isinstance(cw, str) and worker in cw: return True
+                    return False
+                
+                involved_mask = today_tasks_df.apply(is_worker_involved, axis=1)
+                worker_tasks = today_tasks_df[involved_mask].sort_values('作成日時_dt')
+
+            st.markdown("##### 📋 今日の作業内容")
+            if worker_tasks.empty:
+                st.write("システムの作業記録はありません。")
+            else:
+                for _, t_row in worker_tasks.iterrows():
+                    product = t_row.get('製品名', '名称不明')
+                    process = t_row.get('工程名', '工程不明')
+                    detail = t_row.get('詳細', '')
+                    qty = int(t_row.get('出来数', 0))
+                    machine = t_row.get('使用機械', '')
+                    is_helper = t_row.get('入力者名') != worker
+                    
+                    helper_badge = "👤補助" if is_helper else "👑機長"
+                    machine_str = f"[{machine}] " if machine else ""
+                    
+                    st.markdown(f"- `{helper_badge}` **{product}** ＞ {process} {machine_str}({qty:,}個) / 詳細: {detail}")
+            st.divider()
+            # ▲▲▲ 追加ここまで ▲▲▲
+
             st.markdown(f"**🔧 機械の調子:** {row.get('機械の調子', '未記入')}")
             
             hiyari = row.get('ヒヤリハット', '未記入')
