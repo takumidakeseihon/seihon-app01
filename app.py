@@ -509,12 +509,16 @@ def handle_completion(new_data_dict):
             docs_to_move = in_progress_df[in_progress_df["製品名"] == product_name]
             for index, row in docs_to_move.iterrows():
                 doc_data = row.to_dict(); doc_data['ステータス'] = '完了'
+                # ▼ 追加：完了にした時間を新しく記録する
+                doc_data['完了日時'] = firestore.SERVER_TIMESTAMP
                 if '拠点' not in doc_data or pd.isna(doc_data.get('拠点')) or doc_data.get('拠点') == '未設定':
                     clean_name = doc_data.get('製品名', '').strip().replace(' ', '').replace('t', '')
                     doc_data['拠点'] = st.session_state.get('product_to_location', {}).get(clean_name, '未設定')
                 batch.set(db_batch.collection("completed").document(), doc_data)
                 batch.delete(db_batch.collection("in_progress").document(row['id']))
 
+        # ▼ 追加：新しく追加した完了データにも完了時間を記録する
+        new_data_dict['完了日時'] = firestore.SERVER_TIMESTAMP
         batch.set(db_batch.collection("completed").document(), new_data_dict)
         batch.commit()
     handle_db_write(operation, f"✅ 「{new_data_dict['製品名']}」の記録を確定しました。", "完了処理中にエラーが発生")
@@ -532,6 +536,8 @@ def handle_product_completion(product_name):
             moved_count = len(docs_to_move)
             for index, row in docs_to_move.iterrows():
                 doc_data = row.to_dict(); doc_data['ステータス'] = '完了'
+                # ▼ 追加：完了にした時間を新しく記録する
+                doc_data['完了日時'] = firestore.SERVER_TIMESTAMP
                 if '拠点' not in doc_data or pd.isna(doc_data.get('拠点')) or doc_data.get('拠点') == '未設定':
                     clean_name = doc_data.get('製品名', '').strip().replace(' ', '').replace('S', '')
                     doc_data['拠点'] = st.session_state.get('product_to_location', {}).get(clean_name, '未設定')
@@ -678,9 +684,8 @@ def show_daily_report():
 
     with st.spinner(f"{target_date.strftime('%Y年%m月%d日')} の作業履歴をまとめています..."):
         in_prog_df = load_from_firestore(db, "in_progress")
-        # ▼▼▼ 修正箇所 1：取得件数の上限を30件から500件に大幅に引き上げ ▼▼▼
-        comp_df = load_from_firestore(db, "completed", days_limit=500)
-        # ▲▲▲ 修正ここまで ▲▲▲
+        # ▼ 変更：上限をさらに3000件に引き上げ（一括登録での押し出し対策）
+        comp_df = load_from_firestore(db, "completed", days_limit=3000)
         
         if not in_prog_df.empty:
             in_prog_df['_collection'] = "in_progress"
@@ -694,6 +699,8 @@ def show_daily_report():
     
     if not all_df.empty and '作成日時' in all_df.columns:
         all_df['作成日時_dt'] = pd.to_datetime(all_df['作成日時'], utc=True).dt.tz_convert('Asia/Tokyo')
+        
+        # ▼ 変更：ユーザー様のご提案通り、「作成日時」のみでシンプルに抽出する形に戻しました！
         today_df = all_df[all_df['作成日時_dt'].dt.date == target_date]
         
         def is_involved(row):
@@ -944,19 +951,20 @@ def show_admin_dashboard():
             load_from_firestore.clear()
             load_tasks_for_customer.clear()
             st.rerun()
-    # ▲▲▲ 変更ここまで ▲▲▲
-        
+            
     with st.spinner("データベースから日報と作業記録を取得中..."):
         reports_df = load_from_firestore(db, "daily_reports")
         
         in_prog_df = load_from_firestore(db, "in_progress")
-        comp_df = load_from_firestore(db, "completed", days_limit=500)
-        # ▲▲▲ 修正ここまで ▲▲▲
+        # ▼ 変更：上限をさらに3000件に引き上げ（一括登録での押し出し対策）
+        comp_df = load_from_firestore(db, "completed", days_limit=3000)
         all_tasks_df = pd.concat([in_prog_df, comp_df], ignore_index=True)
         today_tasks_df = pd.DataFrame()
         
         if not all_tasks_df.empty and '作成日時' in all_tasks_df.columns:
             all_tasks_df['作成日時_dt'] = pd.to_datetime(all_tasks_df['作成日時'], utc=True).dt.tz_convert('Asia/Tokyo')
+            
+            # ▼ 変更：管理者画面側も同様に「作成日時」のみでシンプルに抽出する形に戻しました！
             today_tasks_df = all_tasks_df[all_tasks_df['作成日時_dt'].dt.date == target_date]
         
     # 拠点に応じた対象メンバーのリストを取得
@@ -1599,6 +1607,8 @@ def main_app():
                                 
                                 for index, row in docs_to_move.iterrows():
                                     doc_data = row.to_dict(); doc_data['ステータス'] = '完了'
+                                    # ▼ 追加：完了にした時間を新しく記録する
+                                    doc_data['完了日時'] = firestore.SERVER_TIMESTAMP
                                     if '拠点' not in doc_data or pd.isna(doc_data.get('拠点')) or doc_data.get('拠点') == '未設定':
                                         doc_data['拠点'] = st.session_state.get('user_location', "未設定")
                                     batch.set(db.collection("completed").document(), doc_data)
@@ -1614,6 +1624,8 @@ def main_app():
                                 if remaining_companies.empty:
                                     for index, common_row in common_docs_to_move.iterrows():
                                         doc_data = common_row.to_dict(); doc_data['ステータス'] = '完了'
+                                        # ▼ 追加：完了にした時間を新しく記録する
+                                        doc_data['完了日時'] = firestore.SERVER_TIMESTAMP
                                         if '拠点' not in doc_data or pd.isna(doc_data.get('拠点')) or doc_data.get('拠点') == '未設定':
                                             doc_data['拠点'] = st.session_state.get('user_location', "未設定")
                                         batch.set(db.collection("completed").document(), doc_data)
