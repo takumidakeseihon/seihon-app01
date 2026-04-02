@@ -151,16 +151,16 @@ def init_firebase():
         st.error(f"データベース接続エラー: {e}")
         return None
 
+# ▼▼▼ 修正1：データ取得ロジックの改善（絶対に最新から取得させる） ▼▼▼
 @st.cache_data(ttl=600)
 def load_from_firestore(_db, collection_name, active_only=False, days_limit=None):
     if not _db: return pd.DataFrame()
     try:
         query = _db.collection(collection_name)
         if days_limit:
-            try:
-                docs = query.order_by("作成日時", direction=firestore.Query.DESCENDING).limit(days_limit).stream()
-            except:
-                docs = query.limit(days_limit).stream()
+            # 以前あった「並び替えに失敗したら順番バラバラに取得する」という危険な保険を削除し、
+            # 常に「作成日時の新しい順」で最新データから確実に取得するようにしました。
+            docs = query.order_by("作成日時", direction=firestore.Query.DESCENDING).limit(days_limit).stream()
         else:
             docs = query.stream()
             
@@ -179,6 +179,7 @@ def load_from_firestore(_db, collection_name, active_only=False, days_limit=None
     except Exception as e:
         st.error(f"❌ {collection_name} のデータ読み込み中にエラーが発生しました: {e}")
         return pd.DataFrame()
+# ▲▲▲ 修正ここまで ▲▲▲
 
 @st.cache_data(ttl=600)
 def load_tasks_for_customer(_db, customer_name):
@@ -684,7 +685,6 @@ def show_daily_report():
 
     with st.spinner(f"{target_date.strftime('%Y年%m月%d日')} の作業履歴をまとめています..."):
         in_prog_df = load_from_firestore(db, "in_progress")
-        # ▼ 変更：上限をさらに3000件に引き上げ（一括登録での押し出し対策）
         comp_df = load_from_firestore(db, "completed", days_limit=3000)
         
         if not in_prog_df.empty:
@@ -700,8 +700,9 @@ def show_daily_report():
     if not all_df.empty and '作成日時' in all_df.columns:
         all_df['作成日時_dt'] = pd.to_datetime(all_df['作成日時'], utc=True).dt.tz_convert('Asia/Tokyo')
         
-        # ▼ 変更：ユーザー様のご提案通り、「作成日時」のみでシンプルに抽出する形に戻しました！
+        # ▼▼▼ 修正2：従業員画面の抽出ルールを「作成日時」のみのシンプルな形に戻す ▼▼▼
         today_df = all_df[all_df['作成日時_dt'].dt.date == target_date]
+        # ▲▲▲ 修正ここまで ▲▲▲
         
         def is_involved(row):
             if row.get('入力者名') == user: return True
@@ -956,7 +957,6 @@ def show_admin_dashboard():
         reports_df = load_from_firestore(db, "daily_reports")
         
         in_prog_df = load_from_firestore(db, "in_progress")
-        # ▼ 変更：上限をさらに3000件に引き上げ（一括登録での押し出し対策）
         comp_df = load_from_firestore(db, "completed", days_limit=3000)
         all_tasks_df = pd.concat([in_prog_df, comp_df], ignore_index=True)
         today_tasks_df = pd.DataFrame()
@@ -964,8 +964,9 @@ def show_admin_dashboard():
         if not all_tasks_df.empty and '作成日時' in all_tasks_df.columns:
             all_tasks_df['作成日時_dt'] = pd.to_datetime(all_tasks_df['作成日時'], utc=True).dt.tz_convert('Asia/Tokyo')
             
-            # ▼ 変更：管理者画面側も同様に「作成日時」のみでシンプルに抽出する形に戻しました！
+            # ▼▼▼ 修正3：管理者画面の抽出ルールも「作成日時」のみのシンプルな形に戻す ▼▼▼
             today_tasks_df = all_tasks_df[all_tasks_df['作成日時_dt'].dt.date == target_date]
+            # ▲▲▲ 修正ここまで ▲▲▲
         
     # 拠点に応じた対象メンバーのリストを取得
     if location_filter == "旭川":
