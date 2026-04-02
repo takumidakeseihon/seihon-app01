@@ -594,7 +594,17 @@ def show_daily_report():
     st.markdown("<h2 style='font-size: clamp(1.2rem, 5vw, 2rem); margin-bottom: 1rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;' title='📝 日報（退勤報告）'>📝 日報（退勤報告）</h2>", unsafe_allow_html=True)
     
     user = st.session_state.logged_in_user
-    st.write(f"**{user}** さん、お疲れ様です！")
+    
+    # ▼▼▼ 追加：従業員用の「最新に更新」ボタン ▼▼▼
+    col1, col2 = st.columns([6, 4])
+    with col1:
+        st.write(f"**{user}** さん、お疲れ様です！")
+    with col2:
+        if st.button("🔄 最新に更新", use_container_width=True, key="refresh_daily_btn"):
+            load_from_firestore.clear()
+            load_tasks_for_customer.clear()
+            st.rerun()
+    # ▲▲▲ 追加ここまで ▲▲▲
     
     with st.spinner("提出状況を確認しています..."):
         reports_df = load_from_firestore(db, "daily_reports")
@@ -668,7 +678,9 @@ def show_daily_report():
 
     with st.spinner(f"{target_date.strftime('%Y年%m月%d日')} の作業履歴をまとめています..."):
         in_prog_df = load_from_firestore(db, "in_progress")
-        comp_df = load_from_firestore(db, "completed", days_limit=30)
+        # ▼▼▼ 修正箇所 1：取得件数の上限を30件から500件に大幅に引き上げ ▼▼▼
+        comp_df = load_from_firestore(db, "completed", days_limit=500)
+        # ▲▲▲ 修正ここまで ▲▲▲
         
         if not in_prog_df.empty:
             in_prog_df['_collection'] = "in_progress"
@@ -912,7 +924,8 @@ def show_admin_dashboard():
         
     st.divider()
     
-    col1, col2 = st.columns(2)
+    # ▼▼▼ 変更箇所：最新データに更新する専用ボタンを設置 ▼▼▼
+    col1, col2, col3 = st.columns([1.5, 2, 1.5])
     with col1:
         target_date = st.date_input("📅 表示する日付", value=datetime.now(timezone(timedelta(hours=9))).date())
     with col2:
@@ -924,12 +937,21 @@ def show_admin_dashboard():
         loc_options = ["すべて", "旭川", "札幌"]
         default_idx = loc_options.index(default_loc)
         location_filter = st.radio("🏢 表示する拠点", loc_options, index=default_idx, horizontal=True)
+    with col3:
+        st.markdown("<div style='margin-top: 28px;'></div>", unsafe_allow_html=True)
+        if st.button("🔄 最新の状況に更新", use_container_width=True):
+            # 古い記憶（キャッシュ）を強制的に消去して画面をリロードする
+            load_from_firestore.clear()
+            load_tasks_for_customer.clear()
+            st.rerun()
+    # ▲▲▲ 変更ここまで ▲▲▲
         
     with st.spinner("データベースから日報と作業記録を取得中..."):
         reports_df = load_from_firestore(db, "daily_reports")
         
         in_prog_df = load_from_firestore(db, "in_progress")
-        comp_df = load_from_firestore(db, "completed", days_limit=30)
+        comp_df = load_from_firestore(db, "completed", days_limit=500)
+        # ▲▲▲ 修正ここまで ▲▲▲
         all_tasks_df = pd.concat([in_prog_df, comp_df], ignore_index=True)
         today_tasks_df = pd.DataFrame()
         
