@@ -151,21 +151,21 @@ def init_firebase():
         st.error(f"データベース接続エラー: {e}")
         return None
 
-# ▼▼▼ 修正1：データ取得ロジックの改善（絶対に最新から取得させる） ▼▼▼
+# ▼▼▼ 修正：全件取得の保険を撤廃し、日本語フィールドを正しく認識させる ▼▼▼
 @st.cache_data(ttl=600)
 def load_from_firestore(_db, collection_name, active_only=False, days_limit=None):
     if not _db: return pd.DataFrame()
     try:
         query = _db.collection(collection_name)
+        
         if days_limit:
-            # 以前あった「並び替えに失敗したら順番バラバラに取得する」という危険な保険を削除し、
-            # 常に「作成日時の新しい順」で最新データから確実に取得するようにしました。
-            docs = query.order_by("作成日時", direction=firestore.Query.DESCENDING).limit(days_limit).stream()
+            # 日本語の項目名でエラーが起きないようバッククォート(`)で囲み、Firebase側に直接並び替えと件数絞り込みをさせます（課金対策）
+            docs = query.order_by("`作成日時`", direction=firestore.Query.DESCENDING).limit(days_limit).stream()
         else:
             docs = query.stream()
             
         records = [doc.to_dict() | {'id': doc.id} for doc in docs]
-        
+
         if not records:
             return pd.DataFrame()
             
