@@ -668,7 +668,9 @@ def show_daily_report():
 
     with st.spinner(f"{target_date.strftime('%Y年%m月%d日')} の作業履歴をまとめています..."):
         in_prog_df = load_from_firestore(db, "in_progress")
-        comp_df = load_from_firestore(db, "completed", days_limit=30)
+        # ▼▼▼ 修正箇所 1：取得件数の上限を30件から500件に大幅に引き上げ ▼▼▼
+        comp_df = load_from_firestore(db, "completed", days_limit=500)
+        # ▲▲▲ 修正ここまで ▲▲▲
         
         if not in_prog_df.empty:
             in_prog_df['_collection'] = "in_progress"
@@ -929,7 +931,9 @@ def show_admin_dashboard():
         reports_df = load_from_firestore(db, "daily_reports")
         
         in_prog_df = load_from_firestore(db, "in_progress")
-        comp_df = load_from_firestore(db, "completed", days_limit=30)
+        # ▼▼▼ 修正箇所 2：管理者画面も取得件数の上限を500件に引き上げ ▼▼▼
+        comp_df = load_from_firestore(db, "completed", days_limit=500)
+        # ▲▲▲ 修正ここまで ▲▲▲
         all_tasks_df = pd.concat([in_prog_df, comp_df], ignore_index=True)
         today_tasks_df = pd.DataFrame()
         
