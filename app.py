@@ -726,6 +726,20 @@ def show_daily_report():
             involved_mask = today_df.apply(is_involved, axis=1)
             today_tasks = today_df[involved_mask].sort_values('作成日時_dt')
             other_tasks = today_df[~involved_mask].sort_values('作成日時_dt')
+            
+            # ▼▼▼ 追加：他の人の作業リストを「自分の拠点」のみに絞り込む ▼▼▼
+            user_loc = st.session_state.get('user_location', "すべて")
+            if user_loc in ["旭川", "札幌"] and not other_tasks.empty:
+                def is_same_location(row):
+                    loc = row.get('拠点', '未設定')
+                    if loc == user_loc: return True
+                    # 拠点が未設定の古いデータ等は、入力した人の所属拠点で判定する
+                    if loc in ['未設定', ''] or pd.isna(loc):
+                        worker = row.get('入力者名', '')
+                        if WORKER_TO_LOCATION.get(worker) == user_loc: return True
+                    return False
+                other_tasks = other_tasks[other_tasks.apply(is_same_location, axis=1)]
+            # ▲▲▲ 追加ここまで ▲▲▲
 
     st.markdown(f"<h3 style='font-size: clamp(1rem, 4vw, 1.4rem); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;' title='📋 {target_date.strftime('%m月%d日')} のあなたの作業履歴'>📋 {target_date.strftime('%m月%d日')} のあなたの作業履歴</h3>", unsafe_allow_html=True)
     
