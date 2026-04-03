@@ -4,6 +4,7 @@ from datetime import datetime, time, timedelta, timezone
 from pathlib import Path
 import math
 import unicodedata # 最強の文字照合用ライブラリ
+import streamlit.components.v1 as components # ▼ 追加：自動スクロール機能を使うためのライブラリ
 
 # Firebaseライブラリをインポート
 import firebase_admin
@@ -151,7 +152,6 @@ def init_firebase():
         st.error(f"データベース接続エラー: {e}")
         return None
 
-# ▼▼▼ 修正：全件取得の保険を撤廃し、日本語フィールドを正しく認識させる ▼▼▼
 @st.cache_data(ttl=600)
 def load_from_firestore(_db, collection_name, active_only=False, days_limit=None):
     if not _db: return pd.DataFrame()
@@ -159,7 +159,6 @@ def load_from_firestore(_db, collection_name, active_only=False, days_limit=None
         query = _db.collection(collection_name)
         
         if days_limit:
-            # 日本語の項目名でエラーが起きないようバッククォート(`)で囲み、Firebase側に直接並び替えと件数絞り込みをさせます（課金対策）
             docs = query.order_by("`作成日時`", direction=firestore.Query.DESCENDING).limit(days_limit).stream()
         else:
             docs = query.stream()
@@ -179,7 +178,6 @@ def load_from_firestore(_db, collection_name, active_only=False, days_limit=None
     except Exception as e:
         st.error(f"❌ {collection_name} のデータ読み込み中にエラーが発生しました: {e}")
         return pd.DataFrame()
-# ▲▲▲ 修正ここまで ▲▲▲
 
 @st.cache_data(ttl=600)
 def load_tasks_for_customer(_db, customer_name):
@@ -267,6 +265,9 @@ def process_form(is_edit_mode=False, default_data=None):
         setup_workers, setup_time, rotation_speed, machine_selection = 0.0, 0, 0, ""
 
         st.subheader("機械情報")
+        
+        is_setup_only = st.checkbox("🔧 セット作業のみ", value=(is_edit_mode and int(default_data.get('出来数', 1)) == 0))
+        
         machine_options = []
         if user_location == "旭川" and process_name in ASAHIKAWA_MACHINES:
             machine_options = list(ASAHIKAWA_MACHINES[process_name])
@@ -318,7 +319,11 @@ def process_form(is_edit_mode=False, default_data=None):
         st.divider()
         st.subheader("作業実績")
         
-        quantity = st.number_input("出来数", min_value=0, step=1, value=int(default_data.get('出来数', 0)))
+        default_qty = 0 if is_setup_only else int(default_data.get('出来数', 0))
+        quantity = st.number_input("出来数", min_value=0, step=1, value=default_qty, disabled=is_setup_only)
+        if is_setup_only:
+            quantity = 0
+
         workers = st.number_input("作業人数（合計）", min_value=0.5, step=0.5, value=float(default_data.get('作業人数', 1.0)), format="%.1f")
         
         if user_location == "旭川":
@@ -354,14 +359,14 @@ def process_form(is_edit_mode=False, default_data=None):
             time_options = [str(i * 10) for i in range(1, 73)]
             default_work_time = str(default_data.get('作業時間_分', 60))
             index = time_options.index(default_work_time) if default_work_time in time_options else 5
-            work_time_str = st.selectbox("作業時間（分）", time_options, index=index)
-            work_time_minutes_input = int(work_time_str)
-            final_detail_value, start_time_obj, end_time_obj = f"{work_time_str}分", None, None
+            work_time_str = st.selectbox("作業時間（分）", time_options, index=index, disabled=is_setup_only)
+            work_time_minutes_input = 0 if is_setup_only else int(work_time_str)
+            final_detail_value, start_time_obj, end_time_obj = f"{work_time_str}分" if not is_setup_only else "セットのみ", None, None
         
         elif process_name == "手作業":
             final_detail_value = st.text_input("手作業の内容", value=detail_value, placeholder="例: 封入、検品、シール貼りなど")
-            start_time_obj = st.time_input("開始時間", step=600, value=start_time_obj_val)
-            end_time_obj = st.time_input("終了時間", step=600, value=end_time_obj_val)
+            start_time_obj = st.time_input("開始時間", step=600, value=start_time_obj_val, disabled=is_setup_only)
+            end_time_obj = st.time_input("終了時間", step=600, value=end_time_obj_val, disabled=is_setup_only)
 
         elif process_name == "折":
             default_selections_pages = []
@@ -374,8 +379,9 @@ def process_form(is_edit_mode=False, default_data=None):
                 default=default_selections_pages
             )
             final_detail_value = ", ".join(selected_options)
-            start_time_obj = st.time_input(start_time_label, step=600, value=start_time_obj_val)
-            end_time_obj = st.time_input("終了時間", step=600, value=end_time_obj_val)
+            start_time_obj = st.time_input(start_time_label, step=600, value=start_time_obj_val, disabled=is_setup_only)
+            end_time_obj = st.time_input("終了時間", step=600, value=end_time_obj_val, disabled=is_setup_only)
+            
         elif process_name in ["中綴じ", "無線綴じ", "糸かがり", "綴じ（カレンダー）"]:
             default_pages = st.session_state.get('default_page_count', 0)
             if is_edit_mode:
@@ -383,8 +389,9 @@ def process_form(is_edit_mode=False, default_data=None):
                 except (ValueError, TypeError): default_pages = 0
             page_count = st.number_input("ページ数／枚数", min_value=0, step=1, value=default_pages)
             final_detail_value = str(page_count)
-            start_time_obj = st.time_input(start_time_label, step=600, value=start_time_obj_val)
-            end_time_obj = st.time_input("終了時間", step=600, value=end_time_obj_val)
+            start_time_obj = st.time_input(start_time_label, step=600, value=start_time_obj_val, disabled=is_setup_only)
+            end_time_obj = st.time_input("終了時間", step=600, value=end_time_obj_val, disabled=is_setup_only)
+            
         elif process_name == "梱包":
             default_packing_type, default_items_per_pack, default_box_count = "", 0, 0
             if is_edit_mode and detail_value:
@@ -409,12 +416,13 @@ def process_form(is_edit_mode=False, default_data=None):
             if items_per_pack > 0: details_list.append(f"{items_per_pack}個/包")
             if box_count > 0: details_list.append(f"{box_count}箱")
             final_detail_value = " | ".join(d for d in details_list if d)
-            start_time_obj = st.time_input("開始時間", step=600, value=start_time_obj_val)
-            end_time_obj = st.time_input("終了時間", step=600, value=end_time_obj_val)
+            start_time_obj = st.time_input("開始時間", step=600, value=start_time_obj_val, disabled=is_setup_only)
+            end_time_obj = st.time_input("終了時間", step=600, value=end_time_obj_val, disabled=is_setup_only)
+            
         else:
             final_detail_value = st.text_input("詳細（任意）", value=detail_value)
-            start_time_obj = st.time_input(start_time_label, step=600, value=start_time_obj_val)
-            end_time_obj = st.time_input("終了時間", step=600, value=end_time_obj_val)
+            start_time_obj = st.time_input(start_time_label, step=600, value=start_time_obj_val, disabled=is_setup_only)
+            end_time_obj = st.time_input("終了時間", step=600, value=end_time_obj_val, disabled=is_setup_only)
 
         remarks = st.text_area("備考", value=default_data.get('備考', ''))
         
@@ -426,23 +434,35 @@ def process_form(is_edit_mode=False, default_data=None):
             submit_button = col_btn1.form_submit_button("作業中として追加", use_container_width=True)
             complete_button = col_btn2.form_submit_button("この内容で最終完了", type="primary", use_container_width=True)
         
+        # ▼ 修正：重複して追加してしまったボタンを1つに統合しました ▼
         if col_btn3.form_submit_button("キャンセル"):
             st.session_state.sub_view = 'SELECT_PROCESS'
+            st.session_state.pop('record_to_copy', None)
             st.rerun()
 
         def prepare_data_dict(status="作業中"):
             work_time_minutes = 0
+            start_time_str = ""
+            end_time_str = ""
+            
             if process_name == "断裁":
                 work_time_minutes = work_time_minutes_input
             else:
-                if not start_time_obj or not end_time_obj:
-                    st.error("❌ 開始時間と終了時間は必須入力です。")
-                    return None
-                if end_time_obj <= start_time_obj:
-                    st.error("❌ 終了時間は開始時間よりも後の時刻を選択してください。")
-                    return None
-                delta = datetime.combine(datetime.today(), end_time_obj) - datetime.combine(datetime.today(), start_time_obj)
-                work_time_minutes = delta.total_seconds() / 60
+                if not is_setup_only:
+                    if not start_time_obj or not end_time_obj:
+                        st.error("❌ 開始時間と終了時間は必須入力です。")
+                        return None
+                    if end_time_obj <= start_time_obj:
+                        st.error("❌ 終了時間は開始時間よりも後の時刻を選択してください。")
+                        return None
+                    delta = datetime.combine(datetime.today(), end_time_obj) - datetime.combine(datetime.today(), start_time_obj)
+                    work_time_minutes = delta.total_seconds() / 60
+                    start_time_str = start_time_obj.strftime('%H:%M')
+                    end_time_str = end_time_obj.strftime('%H:%M')
+                else:
+                    work_time_minutes = 0
+                    start_time_str = ""
+                    end_time_str = ""
             
             return {
                 "入力者名": st.session_state.logged_in_user,
@@ -451,8 +471,8 @@ def process_form(is_edit_mode=False, default_data=None):
                 "使用機械": machine_selection,
                 "記録ID": default_data.get('記録ID', datetime.now().strftime("%Y%m%d%H%M%S%f")),
                 "製品名": product_name, "工程名": process_name, "詳細": final_detail_value,
-                "開始時間": start_time_obj.strftime('%H:%M') if start_time_obj else "",
-                "終了時間": end_time_obj.strftime('%H:%M') if end_time_obj else "",
+                "開始時間": start_time_str,
+                "終了時間": end_time_str,
                 "作業時間_分": int(work_time_minutes), "出来数": int(quantity),
                 "作業人数": float(workers),
                 "ステータス": status, "備考": remarks,
@@ -463,8 +483,8 @@ def process_form(is_edit_mode=False, default_data=None):
             }
 
         def run_validation_and_submit(status):
-            if quantity <= 0:
-                st.error("❌ 出来数は1以上で入力してください。")
+            if not is_setup_only and quantity <= 0:
+                st.error("❌ 出来数は1以上で入力してください。（セットのみの場合は「セット作業のみ」にチェックを入れてください）")
                 return
 
             final_data_dict = prepare_data_dict(status=status)
@@ -475,6 +495,8 @@ def process_form(is_edit_mode=False, default_data=None):
 
         if submit_button: run_validation_and_submit("作業中")
         if complete_button: run_validation_and_submit("完了")
+        
+        # （ここにあった重複したキャンセルボタンのコードは削除しました）
 
 def handle_db_write(operation, success_message, error_message, rerun_on_success=True):
     try:
@@ -484,6 +506,8 @@ def handle_db_write(operation, success_message, error_message, rerun_on_success=
             operation()
             st.session_state.success_msg = success_message
             st.session_state.sub_view = 'SELECT_PROCESS'
+            # ▼ 追加：記録が完了したらコピー用の記憶をリセットする
+            st.session_state.pop('record_to_copy', None)
             if rerun_on_success:
                 load_from_firestore.clear()
                 load_tasks_for_customer.clear()
@@ -510,7 +534,6 @@ def handle_completion(new_data_dict):
             docs_to_move = in_progress_df[in_progress_df["製品名"] == product_name]
             for index, row in docs_to_move.iterrows():
                 doc_data = row.to_dict(); doc_data['ステータス'] = '完了'
-                # ▼ 追加：完了にした時間を新しく記録する
                 doc_data['完了日時'] = firestore.SERVER_TIMESTAMP
                 if '拠点' not in doc_data or pd.isna(doc_data.get('拠点')) or doc_data.get('拠点') == '未設定':
                     clean_name = doc_data.get('製品名', '').strip().replace(' ', '').replace('t', '')
@@ -518,7 +541,6 @@ def handle_completion(new_data_dict):
                 batch.set(db_batch.collection("completed").document(), doc_data)
                 batch.delete(db_batch.collection("in_progress").document(row['id']))
 
-        # ▼ 追加：新しく追加した完了データにも完了時間を記録する
         new_data_dict['完了日時'] = firestore.SERVER_TIMESTAMP
         batch.set(db_batch.collection("completed").document(), new_data_dict)
         batch.commit()
@@ -537,7 +559,6 @@ def handle_product_completion(product_name):
             moved_count = len(docs_to_move)
             for index, row in docs_to_move.iterrows():
                 doc_data = row.to_dict(); doc_data['ステータス'] = '完了'
-                # ▼ 追加：完了にした時間を新しく記録する
                 doc_data['完了日時'] = firestore.SERVER_TIMESTAMP
                 if '拠点' not in doc_data or pd.isna(doc_data.get('拠点')) or doc_data.get('拠点') == '未設定':
                     clean_name = doc_data.get('製品名', '').strip().replace(' ', '').replace('S', '')
@@ -602,7 +623,6 @@ def show_daily_report():
     
     user = st.session_state.logged_in_user
     
-    # ▼▼▼ 追加：従業員用の「最新に更新」ボタン ▼▼▼
     col1, col2 = st.columns([6, 4])
     with col1:
         st.write(f"**{user}** さん、お疲れ様です！")
@@ -611,7 +631,6 @@ def show_daily_report():
             load_from_firestore.clear()
             load_tasks_for_customer.clear()
             st.rerun()
-    # ▲▲▲ 追加ここまで ▲▲▲
     
     with st.spinner("提出状況を確認しています..."):
         reports_df = load_from_firestore(db, "daily_reports")
@@ -700,9 +719,7 @@ def show_daily_report():
     if not all_df.empty and '作成日時' in all_df.columns:
         all_df['作成日時_dt'] = pd.to_datetime(all_df['作成日時'], utc=True).dt.tz_convert('Asia/Tokyo')
         
-        # ▼▼▼ 修正2：従業員画面の抽出ルールを「作成日時」のみのシンプルな形に戻す ▼▼▼
         today_df = all_df[all_df['作成日時_dt'].dt.date == target_date]
-        # ▲▲▲ 修正ここまで ▲▲▲
         
         def is_involved(row):
             if row.get('入力者名') == user: return True
@@ -715,6 +732,20 @@ def show_daily_report():
             involved_mask = today_df.apply(is_involved, axis=1)
             today_tasks = today_df[involved_mask].sort_values('作成日時_dt')
             other_tasks = today_df[~involved_mask].sort_values('作成日時_dt')
+            
+            # ▼▼▼ 追加：他の人の作業リストを「自分の拠点」のみに絞り込む ▼▼▼
+            user_loc = st.session_state.get('user_location', "すべて")
+            if user_loc in ["旭川", "札幌"] and not other_tasks.empty:
+                def is_same_location(row):
+                    loc = row.get('拠点', '未設定')
+                    if loc == user_loc: return True
+                    # 拠点が未設定の古いデータ等は、入力した人の所属拠点で判定する
+                    if loc in ['未設定', ''] or pd.isna(loc):
+                        worker = row.get('入力者名', '')
+                        if WORKER_TO_LOCATION.get(worker) == user_loc: return True
+                    return False
+                other_tasks = other_tasks[other_tasks.apply(is_same_location, axis=1)]
+            # ▲▲▲ 追加ここまで ▲▲▲
 
     st.markdown(f"<h3 style='font-size: clamp(1rem, 4vw, 1.4rem); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;' title='📋 {target_date.strftime('%m月%d日')} のあなたの作業履歴'>📋 {target_date.strftime('%m月%d日')} のあなたの作業履歴</h3>", unsafe_allow_html=True)
     
@@ -732,17 +763,28 @@ def show_daily_report():
             machine = row.get('使用機械', '')
             rotation = int(row.get('回転数', 0)) if pd.notna(row.get('回転数', 0)) else 0
             
-            # ▼ 変更ポイント：自分の日報画面でも、誰（機長）の入力記録なのかを表示する
+            qty_str = f"{qty:,}個"
+            setup_badge = " 🔧セットのみ" if qty == 0 else ""
+            machine_str = f"[{machine}]" if machine else ""
+            
             if is_helper:
                 input_user = row.get('入力者名', '不明')
                 helper_badge = f"👤補助 (機長:{input_user})"
             else:
                 helper_badge = "👑機長"
                 
-            time_str = row['作成日時_dt'].strftime('%H:%M')
-            machine_str = f"[{machine}] " if machine else ""
+            # ▼ 変更：入力時間ではなく、開始時間と作業時間を表示
+            start_t = row.get('開始時間', '')
+            work_m = int(row.get('作業時間_分', 0))
+            if work_m > 0:
+                h = work_m // 60
+                m = work_m % 60
+                wt_str = f"{h}時間{m}分" if h > 0 and m > 0 else (f"{h}時間" if h > 0 else f"{m}分")
+                time_str = f"{start_t}開始 ({wt_str})" if start_t else f"計{wt_str}"
+            else:
+                time_str = f"{start_t}開始" if start_t else "時間記録なし"
             
-            st.markdown(f"- `{time_str}` `{helper_badge}` **{product}** ＞ {process} {machine_str}({qty:,}個) / 詳細: {detail}")
+            st.markdown(f"- `{time_str}` `{helper_badge}` **{product}** ＞ {process} {machine_str}{setup_badge} ({qty_str}) / 詳細: {detail}")
 
     with st.expander("🔍 手伝ったのに上の履歴にない場合はここをクリック", expanded=False):
         st.markdown("他の人が入力した作業記録から、自分が手伝った作業を見つけて「共同作業者」として名前を追加できます。")
@@ -752,15 +794,35 @@ def show_daily_report():
         else:
             task_options = {}
             for idx, row in other_tasks.iterrows():
-                time_str = row['作成日時_dt'].strftime('%H:%M')
                 product = row.get('製品名', '名称不明')
                 process = row.get('工程名', '工程不明')
                 worker = row.get('入力者名', '不明')
                 machine = row.get('使用機械', '')
-                machine_str = f"[{machine}] " if machine else ""
                 qty = int(row.get('出来数', 0))
                 
-                label = f"{time_str} {worker}さんが入力: {product} ＞ {process} {machine_str}({qty}個)"
+                qty_str = f"{qty:,}個"
+                
+                # ▼▼▼ 変更：スマホで見切れないように全体をコンパクトにする ▼▼▼
+                setup_badge = "🔧セット" if qty == 0 else "" # 「のみ」を削ってさらに短く
+                machine_str = f"[{machine}]" if machine else ""
+                
+                start_t = row.get('開始時間', '')
+                work_m = int(row.get('作業時間_分', 0))
+                if work_m > 0:
+                    h = work_m // 60
+                    m = work_m % 60
+                    wt_str = f"{h}時間{m}分" if h > 0 and m > 0 else (f"{h}時間" if h > 0 else f"{m}分")
+                    time_str = f"{start_t}~({wt_str})" if start_t else f"計{wt_str}"
+                else:
+                    time_str = f"{start_t}~" if start_t else "時間なし"
+                
+                # 「赤松 浩明」→「赤松」のように苗字（スペースの前）だけにして短縮する
+                worker_short = worker.split(" ")[0].split("　")[0] 
+                
+                # 一番重要な【製品名】を先頭に持ってくる！
+                label = f"【{product}】{process} ({worker_short}) | {time_str} | {machine_str}{setup_badge} {qty_str}"
+                # ▲▲▲ 変更ここまで ▲▲▲
+                
                 task_options[label] = row
                 
             selected_task_label = st.selectbox("手伝った作業を選んでください", ["（ここから作業を選択）"] + list(task_options.keys()))
@@ -964,9 +1026,7 @@ def show_admin_dashboard():
         if not all_tasks_df.empty and '作成日時' in all_tasks_df.columns:
             all_tasks_df['作成日時_dt'] = pd.to_datetime(all_tasks_df['作成日時'], utc=True).dt.tz_convert('Asia/Tokyo')
             
-            # ▼▼▼ 修正3：管理者画面の抽出ルールも「作成日時」のみのシンプルな形に戻す ▼▼▼
             today_tasks_df = all_tasks_df[all_tasks_df['作成日時_dt'].dt.date == target_date]
-            # ▲▲▲ 修正ここまで ▲▲▲
         
     # 拠点に応じた対象メンバーのリストを取得
     if location_filter == "旭川":
@@ -1073,17 +1133,28 @@ def show_admin_dashboard():
                     machine = t_row.get('使用機械', '')
                     is_helper = t_row.get('入力者名') != worker
                     
-                    # ▼ 変更ポイント：管理画面でも誰の入力かを表示する
+                    qty_str = f"{qty:,}個"
+                    setup_badge = " 🔧セットのみ" if qty == 0 else ""
+                    machine_str = f"[{machine}]" if machine else ""
+                    
                     if is_helper:
                         input_user = t_row.get('入力者名', '不明')
                         helper_badge = f"👤補助 (機長:{input_user})"
                     else:
                         helper_badge = "👑機長"
                         
-                    time_str = t_row['作成日時_dt'].strftime('%H:%M')
-                    machine_str = f"[{machine}] " if machine else ""
+                    # ▼ 変更：管理者画面の詳細リストでも開始時間と作業時間を表示
+                    start_t = t_row.get('開始時間', '')
+                    work_m = int(t_row.get('作業時間_分', 0))
+                    if work_m > 0:
+                        h = work_m // 60
+                        m = work_m % 60
+                        wt_str = f"{h}時間{m}分" if h > 0 and m > 0 else (f"{h}時間" if h > 0 else f"{m}分")
+                        time_str = f"{start_t}開始 ({wt_str})" if start_t else f"計{wt_str}"
+                    else:
+                        time_str = f"{start_t}開始" if start_t else "時間記録なし"
                     
-                    st.markdown(f"- `{time_str}` `{helper_badge}` **{product}** ＞ {process} {machine_str}({qty:,}個) / 詳細: {detail}")
+                    st.markdown(f"- `{time_str}` `{helper_badge}` **{product}** ＞ {process} {machine_str}{setup_badge} ({qty_str}) / 詳細: {detail}")
             st.divider()
 
             st.markdown(f"**🔧 機械の調子:** {row.get('機械の調子', '未記入')}")
@@ -1359,26 +1430,61 @@ def main_app():
                             col_exp_1, col_exp_2 = st.columns(2)
                             if col_exp_1.button("この製品に工程を追加", key=f"add_to_{product}", use_container_width=True):
                                 st.session_state.product_to_select = product
+                                st.session_state.scroll_to_top = True # ▼ 追加：ボタンが押されたら「一番上に戻る」フラグを立てる
                                 st.rerun()
                             if col_exp_2.button("この製品の作業を完了", key=f"complete_{product}", type="primary", use_container_width=True):
                                 handle_product_completion(product)
                             st.divider()
                             for index, row in group_df.iterrows():
-                                c1, c2 = st.columns([4, 1])
+                                # ▼ 変更：ボタンを置くスペースを確保するために3列に分割
+                                c1, c2, c3 = st.columns([4, 1.5, 1.5])
                                 with c1:
                                     worker_name_display = row.get('入力者名', '不明')
                                     machine_display = row.get('使用機械', '')
-                                    caption_text = f"工程: {row['工程名']} ({row['詳細']}) | 出来数: {row['出来数']}個 | 入力者: {worker_name_display}"
+                                    
+                                    qty_display = f"{row['出来数']}個"
+                                    setup_badge = " 🔧セットのみ" if int(row['出来数']) == 0 else ""
+                                    
+                                    caption_text = f"工程: {row['工程名']} ({row['詳細']}) | 出来数: {qty_display} | 入力者: {worker_name_display}"
                                     if machine_display:
-                                        caption_text += f" | 機械: {machine_display}"
+                                        caption_text += f" | 機械: [{machine_display}]{setup_badge}"
+                                    elif setup_badge:
+                                        caption_text += f" | 機械: なし{setup_badge}"
+                                        
                                     st.caption(caption_text)
-                                if c2.button("編集", key=f"edit_{row['id']}", use_container_width=True):
-                                    st.session_state.record_to_edit = row.to_dict()
-                                    st.session_state.sub_view = 'EDIT_FORM'
-                                    st.rerun()
-                                with st.popover("削除"):
+                                with c2:
+                                    if st.button("編集", key=f"edit_{row['id']}", use_container_width=True):
+                                        st.session_state.record_to_edit = row.to_dict()
+                                        st.session_state.sub_view = 'EDIT_FORM'
+                                        st.rerun()
+                                # ▼ 追加：「続きを記録する（コピー）」ボタン
+                                with c3:
+                                    if st.button("🔁続き", key=f"copy_{row['id']}", help="この作業の情報を引き継いで、新しく記録します", use_container_width=True):
+                                        copy_data = row.to_dict()
+                                        # 新しい記録になるので、時間や出来数、セット情報などは白紙に戻す
+                                        copy_data['開始時間'] = ""
+                                        copy_data['終了時間'] = ""
+                                        copy_data['作業時間_分'] = 60 if copy_data.get('工程名') == "断裁" else 0
+                                        copy_data['出来数'] = 0
+                                        copy_data['備考'] = ""
+                                        copy_data['セット人数'] = 0.0
+                                        copy_data['セット時間_分'] = 0
+                                        copy_data['共同作業者'] = [] # 共同作業者もリセット
+                                        copy_data['入力者名'] = st.session_state.logged_in_user # 自分が続きをやる扱いにする
+                                        
+                                        if 'id' in copy_data: del copy_data['id']
+                                        if '記録ID' in copy_data: del copy_data['記録ID']
+                                        
+                                        st.session_state.record_to_copy = copy_data
+                                        st.session_state.selected_product = copy_data.get('製品名', '')
+                                        st.session_state.selected_process = copy_data.get('工程名', '')
+                                        st.session_state.sub_view = 'INPUT_FORM'
+                                        st.session_state.scroll_to_top = True # 自動で上に戻す
+                                        st.rerun()
+                                        
+                                with st.expander("🗑️ 削除"):
                                     st.markdown("本当にこの工程を削除しますか？")
-                                    if st.button("はい、削除します", key=f"delete_confirm_{row['id']}", type="primary"):
+                                    if st.button("はい、削除します", key=f"delete_confirm_{row['id']}", type="primary", use_container_width=True):
                                         try:
                                             if not firebase_admin._apps:
                                                 init_firebase()
@@ -1390,8 +1496,14 @@ def main_app():
                                         except Exception as e:
                                             st.error(f"削除中にエラーが発生しました: {e}")
                                 st.divider()
+                                
         elif st.session_state.sub_view == 'INPUT_FORM':
-            process_form(is_edit_mode=False)
+            # ▼ 変更：コピーデータがある場合は、それを元に新規入力フォームを開く
+            if 'record_to_copy' in st.session_state:
+                process_form(is_edit_mode=False, default_data=st.session_state.record_to_copy)
+            else:
+                process_form(is_edit_mode=False)
+                
         elif st.session_state.sub_view == 'EDIT_FORM':
             record_to_edit = st.session_state.get('record_to_edit')
             if record_to_edit:
@@ -1608,7 +1720,6 @@ def main_app():
                                 
                                 for index, row in docs_to_move.iterrows():
                                     doc_data = row.to_dict(); doc_data['ステータス'] = '完了'
-                                    # ▼ 追加：完了にした時間を新しく記録する
                                     doc_data['完了日時'] = firestore.SERVER_TIMESTAMP
                                     if '拠点' not in doc_data or pd.isna(doc_data.get('拠点')) or doc_data.get('拠点') == '未設定':
                                         doc_data['拠点'] = st.session_state.get('user_location', "未設定")
@@ -1625,7 +1736,6 @@ def main_app():
                                 if remaining_companies.empty:
                                     for index, common_row in common_docs_to_move.iterrows():
                                         doc_data = common_row.to_dict(); doc_data['ステータス'] = '完了'
-                                        # ▼ 追加：完了にした時間を新しく記録する
                                         doc_data['完了日時'] = firestore.SERVER_TIMESTAMP
                                         if '拠点' not in doc_data or pd.isna(doc_data.get('拠点')) or doc_data.get('拠点') == '未設定':
                                             doc_data['拠点'] = st.session_state.get('user_location', "未設定")
@@ -1652,7 +1762,48 @@ def main_app():
 
 st.set_page_config(layout="wide")
 
+# ▼▼▼ 追加：スマホのキーボードがセレクトボックスで勝手に出るのを防ぐ裏技 ▼▼▼
+components.html(
+    """
+    <script>
+        const doc = window.parent.document;
+        function disableSelectKeyboard() {
+            // Streamlitのセレクトボックス(プルダウン)内部の入力欄をすべて取得
+            const inputs = doc.querySelectorAll('div[data-baseweb="select"] input');
+            inputs.forEach(input => {
+                // inputmode="none" を設定することで、スマホのキーボードがポップアップしなくなる
+                if (input.getAttribute('inputmode') !== 'none') {
+                    input.setAttribute('inputmode', 'none');
+                }
+            });
+        }
+        // 即時実行
+        disableSelectKeyboard();
+        // 画面の要素が変化したときにも常に監視して適用する
+        const observer = new MutationObserver(disableSelectKeyboard);
+        observer.observe(doc.body, { childList: true, subtree: true });
+    </script>
+    """,
+    height=0, width=0
+)
+# ▲▲▲ 追加ここまで ▲▲▲
+
 st.markdown("<h1 style='font-size: clamp(1.2rem, 5vw, 2.5rem); padding-top: 1rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;'>📘 製本記録アプリ</h1>", unsafe_allow_html=True)
+
+# ▼▼▼ 追加：画面トップへの自動スクロール用スクリプト ▼▼▼
+if st.session_state.get('scroll_to_top', False):
+    components.html(
+        """
+        <script>
+            var mainEl = window.parent.document.querySelector('.main');
+            if (mainEl) { mainEl.scrollTo({ top: 0, behavior: 'smooth' }); }
+            else { window.parent.scrollTo({ top: 0, behavior: 'smooth' }); }
+        </script>
+        """,
+        height=0
+    )
+    st.session_state.scroll_to_top = False
+# ▲▲▲ 追加ここまで ▲▲▲
 
 if 'submit_disabled' not in st.session_state:
     st.session_state.submit_disabled = False
