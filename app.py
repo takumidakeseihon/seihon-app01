@@ -264,6 +264,10 @@ def process_form(is_edit_mode=False, default_data=None):
         setup_workers, setup_time, rotation_speed, machine_selection = 0.0, 0, 0, ""
 
         st.subheader("機械情報")
+        
+        # ▼ 変更：「セットのみ」のチェックボックスを機械情報の下（すぐ上）に移動しました
+        is_setup_only = st.checkbox("🔧 セット作業のみ", value=(is_edit_mode and int(default_data.get('出来数', 1)) == 0))
+        
         machine_options = []
         if user_location == "旭川" and process_name in ASAHIKAWA_MACHINES:
             machine_options = list(ASAHIKAWA_MACHINES[process_name])
@@ -315,7 +319,7 @@ def process_form(is_edit_mode=False, default_data=None):
         st.divider()
         st.subheader("作業実績")
         
-        is_setup_only = st.checkbox("🔧 セット作業のみ（出来数・時間は入力不要）で記録する", value=(is_edit_mode and int(default_data.get('出来数', 1)) == 0))
+        # （元々ここにあったチェックボックスのコードを削除しました）
         
         default_qty = 0 if is_setup_only else int(default_data.get('出来数', 0))
         quantity = st.number_input("出来数", min_value=0, step=1, value=default_qty, disabled=is_setup_only)
