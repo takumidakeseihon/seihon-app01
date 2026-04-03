@@ -795,21 +795,28 @@ def show_daily_report():
                 qty = int(row.get('出来数', 0))
                 
                 qty_str = f"{qty:,}個"
-                setup_badge = " 🔧セットのみ" if qty == 0 else ""
+                
+                # ▼▼▼ 変更：スマホで見切れないように全体をコンパクトにする ▼▼▼
+                setup_badge = "🔧セット" if qty == 0 else "" # 「のみ」を削ってさらに短く
                 machine_str = f"[{machine}]" if machine else ""
                 
-                # ▼ 変更：手伝ったリストも開始時間と作業時間を表示
                 start_t = row.get('開始時間', '')
                 work_m = int(row.get('作業時間_分', 0))
                 if work_m > 0:
                     h = work_m // 60
                     m = work_m % 60
                     wt_str = f"{h}時間{m}分" if h > 0 and m > 0 else (f"{h}時間" if h > 0 else f"{m}分")
-                    time_str = f"{start_t}開始 ({wt_str})" if start_t else f"計{wt_str}"
+                    time_str = f"{start_t}~({wt_str})" if start_t else f"計{wt_str}"
                 else:
-                    time_str = f"{start_t}開始" if start_t else "時間記録なし"
+                    time_str = f"{start_t}~" if start_t else "時間なし"
                 
-                label = f"{time_str} {worker}さんが入力: {product} ＞ {process} {machine_str}{setup_badge} ({qty_str})"
+                # 「赤松 浩明」→「赤松」のように苗字（スペースの前）だけにして短縮する
+                worker_short = worker.split(" ")[0].split("　")[0] 
+                
+                # 一番重要な【製品名】を先頭に持ってくる！
+                label = f"【{product}】{process} ({worker_short}) | {time_str} | {machine_str}{setup_badge} {qty_str}"
+                # ▲▲▲ 変更ここまで ▲▲▲
+                
                 task_options[label] = row
                 
             selected_task_label = st.selectbox("手伝った作業を選んでください", ["（ここから作業を選択）"] + list(task_options.keys()))
