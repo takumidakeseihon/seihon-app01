@@ -265,7 +265,6 @@ def process_form(is_edit_mode=False, default_data=None):
 
         st.subheader("機械情報")
         
-        # ▼ 変更：「セットのみ」のチェックボックスを機械情報の下（すぐ上）に移動しました
         is_setup_only = st.checkbox("🔧 セット作業のみ", value=(is_edit_mode and int(default_data.get('出来数', 1)) == 0))
         
         machine_options = []
@@ -319,8 +318,6 @@ def process_form(is_edit_mode=False, default_data=None):
         st.divider()
         st.subheader("作業実績")
         
-        # （元々ここにあったチェックボックスのコードを削除しました）
-        
         default_qty = 0 if is_setup_only else int(default_data.get('出来数', 0))
         quantity = st.number_input("出来数", min_value=0, step=1, value=default_qty, disabled=is_setup_only)
         if is_setup_only:
@@ -357,7 +354,6 @@ def process_form(is_edit_mode=False, default_data=None):
 
         start_time_label = "開始時間/※セット時間は含まない" if process_name in setup_processes else "開始時間"
 
-        # ▼ 変更：is_setup_only の場合は時間入力を disabled=True にして無効化する
         if process_name == "断裁":
             time_options = [str(i * 10) for i in range(1, 73)]
             default_work_time = str(default_data.get('作業時間_分', 60))
@@ -449,7 +445,6 @@ def process_form(is_edit_mode=False, default_data=None):
             if process_name == "断裁":
                 work_time_minutes = work_time_minutes_input
             else:
-                # ▼ 変更：セットのみの場合は時間の必須チェックを行わず、空のまま登録する
                 if not is_setup_only:
                     if not start_time_obj or not end_time_obj:
                         st.error("❌ 開始時間と終了時間は必須入力です。")
@@ -747,7 +742,6 @@ def show_daily_report():
             machine = row.get('使用機械', '')
             rotation = int(row.get('回転数', 0)) if pd.notna(row.get('回転数', 0)) else 0
             
-            # ▼ 変更：出来数は常に表示し、「セットのみ」は機械の横にバッジとして表示
             qty_str = f"{qty:,}個"
             setup_badge = " 🔧セットのみ" if qty == 0 else ""
             machine_str = f"[{machine}]" if machine else ""
@@ -758,7 +752,16 @@ def show_daily_report():
             else:
                 helper_badge = "👑機長"
                 
-            time_str = row['作成日時_dt'].strftime('%H:%M')
+            # ▼ 変更：入力時間ではなく、開始時間と作業時間を表示
+            start_t = row.get('開始時間', '')
+            work_m = int(row.get('作業時間_分', 0))
+            if work_m > 0:
+                h = work_m // 60
+                m = work_m % 60
+                wt_str = f"{h}時間{m}分" if h > 0 and m > 0 else (f"{h}時間" if h > 0 else f"{m}分")
+                time_str = f"{start_t}開始 ({wt_str})" if start_t else f"計{wt_str}"
+            else:
+                time_str = f"{start_t}開始" if start_t else "時間記録なし"
             
             st.markdown(f"- `{time_str}` `{helper_badge}` **{product}** ＞ {process} {machine_str}{setup_badge} ({qty_str}) / 詳細: {detail}")
 
@@ -770,17 +773,26 @@ def show_daily_report():
         else:
             task_options = {}
             for idx, row in other_tasks.iterrows():
-                time_str = row['作成日時_dt'].strftime('%H:%M')
                 product = row.get('製品名', '名称不明')
                 process = row.get('工程名', '工程不明')
                 worker = row.get('入力者名', '不明')
                 machine = row.get('使用機械', '')
                 qty = int(row.get('出来数', 0))
                 
-                # ▼ 変更：手伝ったリストも機械の横にバッジを表示
                 qty_str = f"{qty:,}個"
                 setup_badge = " 🔧セットのみ" if qty == 0 else ""
                 machine_str = f"[{machine}]" if machine else ""
+                
+                # ▼ 変更：手伝ったリストも開始時間と作業時間を表示
+                start_t = row.get('開始時間', '')
+                work_m = int(row.get('作業時間_分', 0))
+                if work_m > 0:
+                    h = work_m // 60
+                    m = work_m % 60
+                    wt_str = f"{h}時間{m}分" if h > 0 and m > 0 else (f"{h}時間" if h > 0 else f"{m}分")
+                    time_str = f"{start_t}開始 ({wt_str})" if start_t else f"計{wt_str}"
+                else:
+                    time_str = f"{start_t}開始" if start_t else "時間記録なし"
                 
                 label = f"{time_str} {worker}さんが入力: {product} ＞ {process} {machine_str}{setup_badge} ({qty_str})"
                 task_options[label] = row
@@ -1093,7 +1105,6 @@ def show_admin_dashboard():
                     machine = t_row.get('使用機械', '')
                     is_helper = t_row.get('入力者名') != worker
                     
-                    # ▼ 変更：管理者画面の詳細リストでも機械の横にバッジを表示
                     qty_str = f"{qty:,}個"
                     setup_badge = " 🔧セットのみ" if qty == 0 else ""
                     machine_str = f"[{machine}]" if machine else ""
@@ -1104,7 +1115,16 @@ def show_admin_dashboard():
                     else:
                         helper_badge = "👑機長"
                         
-                    time_str = t_row['作成日時_dt'].strftime('%H:%M')
+                    # ▼ 変更：管理者画面の詳細リストでも開始時間と作業時間を表示
+                    start_t = t_row.get('開始時間', '')
+                    work_m = int(t_row.get('作業時間_分', 0))
+                    if work_m > 0:
+                        h = work_m // 60
+                        m = work_m % 60
+                        wt_str = f"{h}時間{m}分" if h > 0 and m > 0 else (f"{h}時間" if h > 0 else f"{m}分")
+                        time_str = f"{start_t}開始 ({wt_str})" if start_t else f"計{wt_str}"
+                    else:
+                        time_str = f"{start_t}開始" if start_t else "時間記録なし"
                     
                     st.markdown(f"- `{time_str}` `{helper_badge}` **{product}** ＞ {process} {machine_str}{setup_badge} ({qty_str}) / 詳細: {detail}")
             st.divider()
@@ -1392,7 +1412,6 @@ def main_app():
                                     worker_name_display = row.get('入力者名', '不明')
                                     machine_display = row.get('使用機械', '')
                                     
-                                    # ▼ 変更：進行中の作業一覧のリスト表示
                                     qty_display = f"{row['出来数']}個"
                                     setup_badge = " 🔧セットのみ" if int(row['出来数']) == 0 else ""
                                     
@@ -1407,9 +1426,11 @@ def main_app():
                                     st.session_state.record_to_edit = row.to_dict()
                                     st.session_state.sub_view = 'EDIT_FORM'
                                     st.rerun()
-                                with st.popover("削除"):
+                                    
+                                # ▼ 変更：ポップオーバーによるゴーストバグを修正（展開メニューに変更）
+                                with st.expander("🗑️ 削除"):
                                     st.markdown("本当にこの工程を削除しますか？")
-                                    if st.button("はい、削除します", key=f"delete_confirm_{row['id']}", type="primary"):
+                                    if st.button("はい、削除します", key=f"delete_confirm_{row['id']}", type="primary", use_container_width=True):
                                         try:
                                             if not firebase_admin._apps:
                                                 init_firebase()
