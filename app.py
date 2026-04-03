@@ -434,8 +434,10 @@ def process_form(is_edit_mode=False, default_data=None):
             submit_button = col_btn1.form_submit_button("作業中として追加", use_container_width=True)
             complete_button = col_btn2.form_submit_button("この内容で最終完了", type="primary", use_container_width=True)
         
+        # ▼ 修正：重複して追加してしまったボタンを1つに統合しました ▼
         if col_btn3.form_submit_button("キャンセル"):
             st.session_state.sub_view = 'SELECT_PROCESS'
+            st.session_state.pop('record_to_copy', None)
             st.rerun()
 
         def prepare_data_dict(status="作業中"):
@@ -494,11 +496,7 @@ def process_form(is_edit_mode=False, default_data=None):
         if submit_button: run_validation_and_submit("作業中")
         if complete_button: run_validation_and_submit("完了")
         
-        # ▼ 追加：「キャンセル」を押したときにコピー用の記憶も消去する
-        if col_btn3.form_submit_button("キャンセル"):
-            st.session_state.sub_view = 'SELECT_PROCESS'
-            st.session_state.pop('record_to_copy', None)
-            st.rerun()
+        # （ここにあった重複したキャンセルボタンのコードは削除しました）
 
 def handle_db_write(operation, success_message, error_message, rerun_on_success=True):
     try:
