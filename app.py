@@ -493,6 +493,12 @@ def process_form(is_edit_mode=False, default_data=None):
 
         if submit_button: run_validation_and_submit("作業中")
         if complete_button: run_validation_and_submit("完了")
+        
+        # ▼ 追加：「キャンセル」を押したときにコピー用の記憶も消去する
+        if col_btn3.form_submit_button("キャンセル"):
+            st.session_state.sub_view = 'SELECT_PROCESS'
+            st.session_state.pop('record_to_copy', None)
+            st.rerun()
 
 def handle_db_write(operation, success_message, error_message, rerun_on_success=True):
     try:
@@ -502,6 +508,8 @@ def handle_db_write(operation, success_message, error_message, rerun_on_success=
             operation()
             st.session_state.success_msg = success_message
             st.session_state.sub_view = 'SELECT_PROCESS'
+            # ▼ 追加：記録が完了したらコピー用の記憶をリセットする
+            st.session_state.pop('record_to_copy', None)
             if rerun_on_success:
                 load_from_firestore.clear()
                 load_tasks_for_customer.clear()
@@ -1430,7 +1438,8 @@ def main_app():
                                 handle_product_completion(product)
                             st.divider()
                             for index, row in group_df.iterrows():
-                                c1, c2 = st.columns([4, 1])
+                                # ▼ 変更：ボタンを置くスペースを確保するために3列に分割
+                                c1, c2, c3 = st.columns([4, 1.5, 1.5])
                                 with c1:
                                     worker_name_display = row.get('入力者名', '不明')
                                     machine_display = row.get('使用機械', '')
@@ -1445,12 +1454,36 @@ def main_app():
                                         caption_text += f" | 機械: なし{setup_badge}"
                                         
                                     st.caption(caption_text)
-                                if c2.button("編集", key=f"edit_{row['id']}", use_container_width=True):
-                                    st.session_state.record_to_edit = row.to_dict()
-                                    st.session_state.sub_view = 'EDIT_FORM'
-                                    st.rerun()
-                                    
-                                # ▼ 変更：ポップオーバーによるゴーストバグを修正（展開メニューに変更）
+                                with c2:
+                                    if st.button("編集", key=f"edit_{row['id']}", use_container_width=True):
+                                        st.session_state.record_to_edit = row.to_dict()
+                                        st.session_state.sub_view = 'EDIT_FORM'
+                                        st.rerun()
+                                # ▼ 追加：「続きを記録する（コピー）」ボタン
+                                with c3:
+                                    if st.button("🔁続き", key=f"copy_{row['id']}", help="この作業の情報を引き継いで、新しく記録します", use_container_width=True):
+                                        copy_data = row.to_dict()
+                                        # 新しい記録になるので、時間や出来数、セット情報などは白紙に戻す
+                                        copy_data['開始時間'] = ""
+                                        copy_data['終了時間'] = ""
+                                        copy_data['作業時間_分'] = 60 if copy_data.get('工程名') == "断裁" else 0
+                                        copy_data['出来数'] = 0
+                                        copy_data['備考'] = ""
+                                        copy_data['セット人数'] = 0.0
+                                        copy_data['セット時間_分'] = 0
+                                        copy_data['共同作業者'] = [] # 共同作業者もリセット
+                                        copy_data['入力者名'] = st.session_state.logged_in_user # 自分が続きをやる扱いにする
+                                        
+                                        if 'id' in copy_data: del copy_data['id']
+                                        if '記録ID' in copy_data: del copy_data['記録ID']
+                                        
+                                        st.session_state.record_to_copy = copy_data
+                                        st.session_state.selected_product = copy_data.get('製品名', '')
+                                        st.session_state.selected_process = copy_data.get('工程名', '')
+                                        st.session_state.sub_view = 'INPUT_FORM'
+                                        st.session_state.scroll_to_top = True # 自動で上に戻す
+                                        st.rerun()
+                                        
                                 with st.expander("🗑️ 削除"):
                                     st.markdown("本当にこの工程を削除しますか？")
                                     if st.button("はい、削除します", key=f"delete_confirm_{row['id']}", type="primary", use_container_width=True):
@@ -1465,8 +1498,14 @@ def main_app():
                                         except Exception as e:
                                             st.error(f"削除中にエラーが発生しました: {e}")
                                 st.divider()
+                                
         elif st.session_state.sub_view == 'INPUT_FORM':
-            process_form(is_edit_mode=False)
+            # ▼ 変更：コピーデータがある場合は、それを元に新規入力フォームを開く
+            if 'record_to_copy' in st.session_state:
+                process_form(is_edit_mode=False, default_data=st.session_state.record_to_copy)
+            else:
+                process_form(is_edit_mode=False)
+                
         elif st.session_state.sub_view == 'EDIT_FORM':
             record_to_edit = st.session_state.get('record_to_edit')
             if record_to_edit:
