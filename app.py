@@ -318,7 +318,15 @@ def process_form(is_edit_mode=False, default_data=None):
         st.divider()
         st.subheader("作業実績")
         
-        quantity = st.number_input("出来数", min_value=0, step=1, value=int(default_data.get('出来数', 0)))
+        # ▼▼▼ 修正1：セットのみのチェックボックスを追加 ▼▼▼
+        is_setup_only = st.checkbox("🔧 セット作業のみ（出来数なし）で記録する", value=(is_edit_mode and int(default_data.get('出来数', 1)) == 0))
+        
+        default_qty = 0 if is_setup_only else int(default_data.get('出来数', 0))
+        quantity = st.number_input("出来数", min_value=0, step=1, value=default_qty, disabled=is_setup_only)
+        if is_setup_only:
+            quantity = 0
+        # ▲▲▲ 修正ここまで ▲▲▲
+
         workers = st.number_input("作業人数（合計）", min_value=0.5, step=0.5, value=float(default_data.get('作業人数', 1.0)), format="%.1f")
         
         if user_location == "旭川":
@@ -463,9 +471,11 @@ def process_form(is_edit_mode=False, default_data=None):
             }
 
         def run_validation_and_submit(status):
-            if quantity <= 0:
-                st.error("❌ 出来数は1以上で入力してください。")
+            # ▼▼▼ 修正2：セットのみの場合は出来数0を許可する ▼▼▼
+            if not is_setup_only and quantity <= 0:
+                st.error("❌ 出来数は1以上で入力してください。（セットのみの場合は「セット作業のみ」にチェックを入れてください）")
                 return
+            # ▲▲▲ 修正ここまで ▲▲▲
 
             final_data_dict = prepare_data_dict(status=status)
             if final_data_dict:
@@ -732,7 +742,9 @@ def show_daily_report():
             machine = row.get('使用機械', '')
             rotation = int(row.get('回転数', 0)) if pd.notna(row.get('回転数', 0)) else 0
             
-            # ▼ 変更ポイント：自分の日報画面でも、誰（機長）の入力記録なのかを表示する
+            # ▼▼▼ 修正3：出来数0の時は「セットのみ」と表示させる ▼▼▼
+            qty_str = f"{qty:,}個" if qty > 0 else "セットのみ"
+            
             if is_helper:
                 input_user = row.get('入力者名', '不明')
                 helper_badge = f"👤補助 (機長:{input_user})"
@@ -742,7 +754,8 @@ def show_daily_report():
             time_str = row['作成日時_dt'].strftime('%H:%M')
             machine_str = f"[{machine}] " if machine else ""
             
-            st.markdown(f"- `{time_str}` `{helper_badge}` **{product}** ＞ {process} {machine_str}({qty:,}個) / 詳細: {detail}")
+            st.markdown(f"- `{time_str}` `{helper_badge}` **{product}** ＞ {process} {machine_str}({qty_str}) / 詳細: {detail}")
+            # ▲▲▲ 修正ここまで ▲▲▲
 
     with st.expander("🔍 手伝ったのに上の履歴にない場合はここをクリック", expanded=False):
         st.markdown("他の人が入力した作業記録から、自分が手伝った作業を見つけて「共同作業者」として名前を追加できます。")
@@ -760,7 +773,10 @@ def show_daily_report():
                 machine_str = f"[{machine}] " if machine else ""
                 qty = int(row.get('出来数', 0))
                 
-                label = f"{time_str} {worker}さんが入力: {product} ＞ {process} {machine_str}({qty}個)"
+                # ▼▼▼ 修正4：他の人の作業リストも「セットのみ」と表示させる ▼▼▼
+                qty_str = f"{qty}個" if qty > 0 else "セットのみ"
+                label = f"{time_str} {worker}さんが入力: {product} ＞ {process} {machine_str}({qty_str})"
+                # ▲▲▲ 修正ここまで ▲▲▲
                 task_options[label] = row
                 
             selected_task_label = st.selectbox("手伝った作業を選んでください", ["（ここから作業を選択）"] + list(task_options.keys()))
@@ -1073,7 +1089,9 @@ def show_admin_dashboard():
                     machine = t_row.get('使用機械', '')
                     is_helper = t_row.get('入力者名') != worker
                     
-                    # ▼ 変更ポイント：管理画面でも誰の入力かを表示する
+                    # ▼▼▼ 修正5：管理者画面の詳細リストでも「セットのみ」と表示させる ▼▼▼
+                    qty_str = f"{qty:,}個" if qty > 0 else "セットのみ"
+                    
                     if is_helper:
                         input_user = t_row.get('入力者名', '不明')
                         helper_badge = f"👤補助 (機長:{input_user})"
@@ -1083,7 +1101,8 @@ def show_admin_dashboard():
                     time_str = t_row['作成日時_dt'].strftime('%H:%M')
                     machine_str = f"[{machine}] " if machine else ""
                     
-                    st.markdown(f"- `{time_str}` `{helper_badge}` **{product}** ＞ {process} {machine_str}({qty:,}個) / 詳細: {detail}")
+                    st.markdown(f"- `{time_str}` `{helper_badge}` **{product}** ＞ {process} {machine_str}({qty_str}) / 詳細: {detail}")
+                    # ▲▲▲ 修正ここまで ▲▲▲
             st.divider()
 
             st.markdown(f"**🔧 機械の調子:** {row.get('機械の調子', '未記入')}")
@@ -1368,7 +1387,10 @@ def main_app():
                                 with c1:
                                     worker_name_display = row.get('入力者名', '不明')
                                     machine_display = row.get('使用機械', '')
-                                    caption_text = f"工程: {row['工程名']} ({row['詳細']}) | 出来数: {row['出来数']}個 | 入力者: {worker_name_display}"
+                                    # ▼▼▼ 修正6：進行中の作業一覧でも「セットのみ」と表示させる ▼▼▼
+                                    qty_display = f"{row['出来数']}個" if int(row['出来数']) > 0 else "セットのみ"
+                                    caption_text = f"工程: {row['工程名']} ({row['詳細']}) | 出来数: {qty_display} | 入力者: {worker_name_display}"
+                                    # ▲▲▲ 修正ここまで ▲▲▲
                                     if machine_display:
                                         caption_text += f" | 機械: {machine_display}"
                                     st.caption(caption_text)
