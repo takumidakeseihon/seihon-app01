@@ -1704,6 +1704,32 @@ def main_app():
 
 st.set_page_config(layout="wide")
 
+# ▼▼▼ 追加：スマホのキーボードがセレクトボックスで勝手に出るのを防ぐ裏技 ▼▼▼
+components.html(
+    """
+    <script>
+        const doc = window.parent.document;
+        function disableSelectKeyboard() {
+            // Streamlitのセレクトボックス(プルダウン)内部の入力欄をすべて取得
+            const inputs = doc.querySelectorAll('div[data-baseweb="select"] input');
+            inputs.forEach(input => {
+                // inputmode="none" を設定することで、スマホのキーボードがポップアップしなくなる
+                if (input.getAttribute('inputmode') !== 'none') {
+                    input.setAttribute('inputmode', 'none');
+                }
+            });
+        }
+        // 即時実行
+        disableSelectKeyboard();
+        // 画面の要素が変化したときにも常に監視して適用する
+        const observer = new MutationObserver(disableSelectKeyboard);
+        observer.observe(doc.body, { childList: true, subtree: true });
+    </script>
+    """,
+    height=0, width=0
+)
+# ▲▲▲ 追加ここまで ▲▲▲
+
 st.markdown("<h1 style='font-size: clamp(1.2rem, 5vw, 2.5rem); padding-top: 1rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;'>📘 製本記録アプリ</h1>", unsafe_allow_html=True)
 
 # ▼▼▼ 追加：画面トップへの自動スクロール用スクリプト ▼▼▼
