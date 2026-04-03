@@ -151,7 +151,6 @@ def init_firebase():
         st.error(f"データベース接続エラー: {e}")
         return None
 
-# ▼▼▼ 修正：全件取得の保険を撤廃し、日本語フィールドを正しく認識させる ▼▼▼
 @st.cache_data(ttl=600)
 def load_from_firestore(_db, collection_name, active_only=False, days_limit=None):
     if not _db: return pd.DataFrame()
@@ -159,7 +158,6 @@ def load_from_firestore(_db, collection_name, active_only=False, days_limit=None
         query = _db.collection(collection_name)
         
         if days_limit:
-            # 日本語の項目名でエラーが起きないようバッククォート(`)で囲み、Firebase側に直接並び替えと件数絞り込みをさせます（課金対策）
             docs = query.order_by("`作成日時`", direction=firestore.Query.DESCENDING).limit(days_limit).stream()
         else:
             docs = query.stream()
@@ -179,7 +177,6 @@ def load_from_firestore(_db, collection_name, active_only=False, days_limit=None
     except Exception as e:
         st.error(f"❌ {collection_name} のデータ読み込み中にエラーが発生しました: {e}")
         return pd.DataFrame()
-# ▲▲▲ 修正ここまで ▲▲▲
 
 @st.cache_data(ttl=600)
 def load_tasks_for_customer(_db, customer_name):
@@ -318,14 +315,12 @@ def process_form(is_edit_mode=False, default_data=None):
         st.divider()
         st.subheader("作業実績")
         
-        # ▼▼▼ 修正1：セットのみのチェックボックスを追加 ▼▼▼
-        is_setup_only = st.checkbox("🔧 セット作業のみ（出来数なし）で記録する", value=(is_edit_mode and int(default_data.get('出来数', 1)) == 0))
+        is_setup_only = st.checkbox("🔧 セット作業のみ（出来数・時間は入力不要）で記録する", value=(is_edit_mode and int(default_data.get('出来数', 1)) == 0))
         
         default_qty = 0 if is_setup_only else int(default_data.get('出来数', 0))
         quantity = st.number_input("出来数", min_value=0, step=1, value=default_qty, disabled=is_setup_only)
         if is_setup_only:
             quantity = 0
-        # ▲▲▲ 修正ここまで ▲▲▲
 
         workers = st.number_input("作業人数（合計）", min_value=0.5, step=0.5, value=float(default_data.get('作業人数', 1.0)), format="%.1f")
         
@@ -358,18 +353,19 @@ def process_form(is_edit_mode=False, default_data=None):
 
         start_time_label = "開始時間/※セット時間は含まない" if process_name in setup_processes else "開始時間"
 
+        # ▼ 変更：is_setup_only の場合は時間入力を disabled=True にして無効化する
         if process_name == "断裁":
             time_options = [str(i * 10) for i in range(1, 73)]
             default_work_time = str(default_data.get('作業時間_分', 60))
             index = time_options.index(default_work_time) if default_work_time in time_options else 5
-            work_time_str = st.selectbox("作業時間（分）", time_options, index=index)
-            work_time_minutes_input = int(work_time_str)
-            final_detail_value, start_time_obj, end_time_obj = f"{work_time_str}分", None, None
+            work_time_str = st.selectbox("作業時間（分）", time_options, index=index, disabled=is_setup_only)
+            work_time_minutes_input = 0 if is_setup_only else int(work_time_str)
+            final_detail_value, start_time_obj, end_time_obj = f"{work_time_str}分" if not is_setup_only else "セットのみ", None, None
         
         elif process_name == "手作業":
             final_detail_value = st.text_input("手作業の内容", value=detail_value, placeholder="例: 封入、検品、シール貼りなど")
-            start_time_obj = st.time_input("開始時間", step=600, value=start_time_obj_val)
-            end_time_obj = st.time_input("終了時間", step=600, value=end_time_obj_val)
+            start_time_obj = st.time_input("開始時間", step=600, value=start_time_obj_val, disabled=is_setup_only)
+            end_time_obj = st.time_input("終了時間", step=600, value=end_time_obj_val, disabled=is_setup_only)
 
         elif process_name == "折":
             default_selections_pages = []
@@ -382,8 +378,9 @@ def process_form(is_edit_mode=False, default_data=None):
                 default=default_selections_pages
             )
             final_detail_value = ", ".join(selected_options)
-            start_time_obj = st.time_input(start_time_label, step=600, value=start_time_obj_val)
-            end_time_obj = st.time_input("終了時間", step=600, value=end_time_obj_val)
+            start_time_obj = st.time_input(start_time_label, step=600, value=start_time_obj_val, disabled=is_setup_only)
+            end_time_obj = st.time_input("終了時間", step=600, value=end_time_obj_val, disabled=is_setup_only)
+            
         elif process_name in ["中綴じ", "無線綴じ", "糸かがり", "綴じ（カレンダー）"]:
             default_pages = st.session_state.get('default_page_count', 0)
             if is_edit_mode:
@@ -391,8 +388,9 @@ def process_form(is_edit_mode=False, default_data=None):
                 except (ValueError, TypeError): default_pages = 0
             page_count = st.number_input("ページ数／枚数", min_value=0, step=1, value=default_pages)
             final_detail_value = str(page_count)
-            start_time_obj = st.time_input(start_time_label, step=600, value=start_time_obj_val)
-            end_time_obj = st.time_input("終了時間", step=600, value=end_time_obj_val)
+            start_time_obj = st.time_input(start_time_label, step=600, value=start_time_obj_val, disabled=is_setup_only)
+            end_time_obj = st.time_input("終了時間", step=600, value=end_time_obj_val, disabled=is_setup_only)
+            
         elif process_name == "梱包":
             default_packing_type, default_items_per_pack, default_box_count = "", 0, 0
             if is_edit_mode and detail_value:
@@ -417,12 +415,13 @@ def process_form(is_edit_mode=False, default_data=None):
             if items_per_pack > 0: details_list.append(f"{items_per_pack}個/包")
             if box_count > 0: details_list.append(f"{box_count}箱")
             final_detail_value = " | ".join(d for d in details_list if d)
-            start_time_obj = st.time_input("開始時間", step=600, value=start_time_obj_val)
-            end_time_obj = st.time_input("終了時間", step=600, value=end_time_obj_val)
+            start_time_obj = st.time_input("開始時間", step=600, value=start_time_obj_val, disabled=is_setup_only)
+            end_time_obj = st.time_input("終了時間", step=600, value=end_time_obj_val, disabled=is_setup_only)
+            
         else:
             final_detail_value = st.text_input("詳細（任意）", value=detail_value)
-            start_time_obj = st.time_input(start_time_label, step=600, value=start_time_obj_val)
-            end_time_obj = st.time_input("終了時間", step=600, value=end_time_obj_val)
+            start_time_obj = st.time_input(start_time_label, step=600, value=start_time_obj_val, disabled=is_setup_only)
+            end_time_obj = st.time_input("終了時間", step=600, value=end_time_obj_val, disabled=is_setup_only)
 
         remarks = st.text_area("備考", value=default_data.get('備考', ''))
         
@@ -440,17 +439,28 @@ def process_form(is_edit_mode=False, default_data=None):
 
         def prepare_data_dict(status="作業中"):
             work_time_minutes = 0
+            start_time_str = ""
+            end_time_str = ""
+            
             if process_name == "断裁":
                 work_time_minutes = work_time_minutes_input
             else:
-                if not start_time_obj or not end_time_obj:
-                    st.error("❌ 開始時間と終了時間は必須入力です。")
-                    return None
-                if end_time_obj <= start_time_obj:
-                    st.error("❌ 終了時間は開始時間よりも後の時刻を選択してください。")
-                    return None
-                delta = datetime.combine(datetime.today(), end_time_obj) - datetime.combine(datetime.today(), start_time_obj)
-                work_time_minutes = delta.total_seconds() / 60
+                # ▼ 変更：セットのみの場合は時間の必須チェックを行わず、空のまま登録する
+                if not is_setup_only:
+                    if not start_time_obj or not end_time_obj:
+                        st.error("❌ 開始時間と終了時間は必須入力です。")
+                        return None
+                    if end_time_obj <= start_time_obj:
+                        st.error("❌ 終了時間は開始時間よりも後の時刻を選択してください。")
+                        return None
+                    delta = datetime.combine(datetime.today(), end_time_obj) - datetime.combine(datetime.today(), start_time_obj)
+                    work_time_minutes = delta.total_seconds() / 60
+                    start_time_str = start_time_obj.strftime('%H:%M')
+                    end_time_str = end_time_obj.strftime('%H:%M')
+                else:
+                    work_time_minutes = 0
+                    start_time_str = ""
+                    end_time_str = ""
             
             return {
                 "入力者名": st.session_state.logged_in_user,
@@ -459,8 +469,8 @@ def process_form(is_edit_mode=False, default_data=None):
                 "使用機械": machine_selection,
                 "記録ID": default_data.get('記録ID', datetime.now().strftime("%Y%m%d%H%M%S%f")),
                 "製品名": product_name, "工程名": process_name, "詳細": final_detail_value,
-                "開始時間": start_time_obj.strftime('%H:%M') if start_time_obj else "",
-                "終了時間": end_time_obj.strftime('%H:%M') if end_time_obj else "",
+                "開始時間": start_time_str,
+                "終了時間": end_time_str,
                 "作業時間_分": int(work_time_minutes), "出来数": int(quantity),
                 "作業人数": float(workers),
                 "ステータス": status, "備考": remarks,
@@ -471,11 +481,9 @@ def process_form(is_edit_mode=False, default_data=None):
             }
 
         def run_validation_and_submit(status):
-            # ▼▼▼ 修正2：セットのみの場合は出来数0を許可する ▼▼▼
             if not is_setup_only and quantity <= 0:
                 st.error("❌ 出来数は1以上で入力してください。（セットのみの場合は「セット作業のみ」にチェックを入れてください）")
                 return
-            # ▲▲▲ 修正ここまで ▲▲▲
 
             final_data_dict = prepare_data_dict(status=status)
             if final_data_dict:
@@ -520,7 +528,6 @@ def handle_completion(new_data_dict):
             docs_to_move = in_progress_df[in_progress_df["製品名"] == product_name]
             for index, row in docs_to_move.iterrows():
                 doc_data = row.to_dict(); doc_data['ステータス'] = '完了'
-                # ▼ 追加：完了にした時間を新しく記録する
                 doc_data['完了日時'] = firestore.SERVER_TIMESTAMP
                 if '拠点' not in doc_data or pd.isna(doc_data.get('拠点')) or doc_data.get('拠点') == '未設定':
                     clean_name = doc_data.get('製品名', '').strip().replace(' ', '').replace('t', '')
@@ -528,7 +535,6 @@ def handle_completion(new_data_dict):
                 batch.set(db_batch.collection("completed").document(), doc_data)
                 batch.delete(db_batch.collection("in_progress").document(row['id']))
 
-        # ▼ 追加：新しく追加した完了データにも完了時間を記録する
         new_data_dict['完了日時'] = firestore.SERVER_TIMESTAMP
         batch.set(db_batch.collection("completed").document(), new_data_dict)
         batch.commit()
@@ -547,7 +553,6 @@ def handle_product_completion(product_name):
             moved_count = len(docs_to_move)
             for index, row in docs_to_move.iterrows():
                 doc_data = row.to_dict(); doc_data['ステータス'] = '完了'
-                # ▼ 追加：完了にした時間を新しく記録する
                 doc_data['完了日時'] = firestore.SERVER_TIMESTAMP
                 if '拠点' not in doc_data or pd.isna(doc_data.get('拠点')) or doc_data.get('拠点') == '未設定':
                     clean_name = doc_data.get('製品名', '').strip().replace(' ', '').replace('S', '')
@@ -612,7 +617,6 @@ def show_daily_report():
     
     user = st.session_state.logged_in_user
     
-    # ▼▼▼ 追加：従業員用の「最新に更新」ボタン ▼▼▼
     col1, col2 = st.columns([6, 4])
     with col1:
         st.write(f"**{user}** さん、お疲れ様です！")
@@ -621,7 +625,6 @@ def show_daily_report():
             load_from_firestore.clear()
             load_tasks_for_customer.clear()
             st.rerun()
-    # ▲▲▲ 追加ここまで ▲▲▲
     
     with st.spinner("提出状況を確認しています..."):
         reports_df = load_from_firestore(db, "daily_reports")
@@ -710,9 +713,7 @@ def show_daily_report():
     if not all_df.empty and '作成日時' in all_df.columns:
         all_df['作成日時_dt'] = pd.to_datetime(all_df['作成日時'], utc=True).dt.tz_convert('Asia/Tokyo')
         
-        # ▼▼▼ 修正2：従業員画面の抽出ルールを「作成日時」のみのシンプルな形に戻す ▼▼▼
         today_df = all_df[all_df['作成日時_dt'].dt.date == target_date]
-        # ▲▲▲ 修正ここまで ▲▲▲
         
         def is_involved(row):
             if row.get('入力者名') == user: return True
@@ -742,8 +743,10 @@ def show_daily_report():
             machine = row.get('使用機械', '')
             rotation = int(row.get('回転数', 0)) if pd.notna(row.get('回転数', 0)) else 0
             
-            # ▼▼▼ 修正3：出来数0の時は「セットのみ」と表示させる ▼▼▼
-            qty_str = f"{qty:,}個" if qty > 0 else "セットのみ"
+            # ▼ 変更：出来数は常に表示し、「セットのみ」は機械の横にバッジとして表示
+            qty_str = f"{qty:,}個"
+            setup_badge = " 🔧セットのみ" if qty == 0 else ""
+            machine_str = f"[{machine}]" if machine else ""
             
             if is_helper:
                 input_user = row.get('入力者名', '不明')
@@ -752,10 +755,8 @@ def show_daily_report():
                 helper_badge = "👑機長"
                 
             time_str = row['作成日時_dt'].strftime('%H:%M')
-            machine_str = f"[{machine}] " if machine else ""
             
-            st.markdown(f"- `{time_str}` `{helper_badge}` **{product}** ＞ {process} {machine_str}({qty_str}) / 詳細: {detail}")
-            # ▲▲▲ 修正ここまで ▲▲▲
+            st.markdown(f"- `{time_str}` `{helper_badge}` **{product}** ＞ {process} {machine_str}{setup_badge} ({qty_str}) / 詳細: {detail}")
 
     with st.expander("🔍 手伝ったのに上の履歴にない場合はここをクリック", expanded=False):
         st.markdown("他の人が入力した作業記録から、自分が手伝った作業を見つけて「共同作業者」として名前を追加できます。")
@@ -770,13 +771,14 @@ def show_daily_report():
                 process = row.get('工程名', '工程不明')
                 worker = row.get('入力者名', '不明')
                 machine = row.get('使用機械', '')
-                machine_str = f"[{machine}] " if machine else ""
                 qty = int(row.get('出来数', 0))
                 
-                # ▼▼▼ 修正4：他の人の作業リストも「セットのみ」と表示させる ▼▼▼
-                qty_str = f"{qty}個" if qty > 0 else "セットのみ"
-                label = f"{time_str} {worker}さんが入力: {product} ＞ {process} {machine_str}({qty_str})"
-                # ▲▲▲ 修正ここまで ▲▲▲
+                # ▼ 変更：手伝ったリストも機械の横にバッジを表示
+                qty_str = f"{qty:,}個"
+                setup_badge = " 🔧セットのみ" if qty == 0 else ""
+                machine_str = f"[{machine}]" if machine else ""
+                
+                label = f"{time_str} {worker}さんが入力: {product} ＞ {process} {machine_str}{setup_badge} ({qty_str})"
                 task_options[label] = row
                 
             selected_task_label = st.selectbox("手伝った作業を選んでください", ["（ここから作業を選択）"] + list(task_options.keys()))
@@ -980,9 +982,7 @@ def show_admin_dashboard():
         if not all_tasks_df.empty and '作成日時' in all_tasks_df.columns:
             all_tasks_df['作成日時_dt'] = pd.to_datetime(all_tasks_df['作成日時'], utc=True).dt.tz_convert('Asia/Tokyo')
             
-            # ▼▼▼ 修正3：管理者画面の抽出ルールも「作成日時」のみのシンプルな形に戻す ▼▼▼
             today_tasks_df = all_tasks_df[all_tasks_df['作成日時_dt'].dt.date == target_date]
-            # ▲▲▲ 修正ここまで ▲▲▲
         
     # 拠点に応じた対象メンバーのリストを取得
     if location_filter == "旭川":
@@ -1089,8 +1089,10 @@ def show_admin_dashboard():
                     machine = t_row.get('使用機械', '')
                     is_helper = t_row.get('入力者名') != worker
                     
-                    # ▼▼▼ 修正5：管理者画面の詳細リストでも「セットのみ」と表示させる ▼▼▼
-                    qty_str = f"{qty:,}個" if qty > 0 else "セットのみ"
+                    # ▼ 変更：管理者画面の詳細リストでも機械の横にバッジを表示
+                    qty_str = f"{qty:,}個"
+                    setup_badge = " 🔧セットのみ" if qty == 0 else ""
+                    machine_str = f"[{machine}]" if machine else ""
                     
                     if is_helper:
                         input_user = t_row.get('入力者名', '不明')
@@ -1099,10 +1101,8 @@ def show_admin_dashboard():
                         helper_badge = "👑機長"
                         
                     time_str = t_row['作成日時_dt'].strftime('%H:%M')
-                    machine_str = f"[{machine}] " if machine else ""
                     
-                    st.markdown(f"- `{time_str}` `{helper_badge}` **{product}** ＞ {process} {machine_str}({qty_str}) / 詳細: {detail}")
-                    # ▲▲▲ 修正ここまで ▲▲▲
+                    st.markdown(f"- `{time_str}` `{helper_badge}` **{product}** ＞ {process} {machine_str}{setup_badge} ({qty_str}) / 詳細: {detail}")
             st.divider()
 
             st.markdown(f"**🔧 機械の調子:** {row.get('機械の調子', '未記入')}")
@@ -1387,12 +1387,17 @@ def main_app():
                                 with c1:
                                     worker_name_display = row.get('入力者名', '不明')
                                     machine_display = row.get('使用機械', '')
-                                    # ▼▼▼ 修正6：進行中の作業一覧でも「セットのみ」と表示させる ▼▼▼
-                                    qty_display = f"{row['出来数']}個" if int(row['出来数']) > 0 else "セットのみ"
+                                    
+                                    # ▼ 変更：進行中の作業一覧のリスト表示
+                                    qty_display = f"{row['出来数']}個"
+                                    setup_badge = " 🔧セットのみ" if int(row['出来数']) == 0 else ""
+                                    
                                     caption_text = f"工程: {row['工程名']} ({row['詳細']}) | 出来数: {qty_display} | 入力者: {worker_name_display}"
-                                    # ▲▲▲ 修正ここまで ▲▲▲
                                     if machine_display:
-                                        caption_text += f" | 機械: {machine_display}"
+                                        caption_text += f" | 機械: [{machine_display}]{setup_badge}"
+                                    elif setup_badge:
+                                        caption_text += f" | 機械: なし{setup_badge}"
+                                        
                                     st.caption(caption_text)
                                 if c2.button("編集", key=f"edit_{row['id']}", use_container_width=True):
                                     st.session_state.record_to_edit = row.to_dict()
@@ -1630,7 +1635,6 @@ def main_app():
                                 
                                 for index, row in docs_to_move.iterrows():
                                     doc_data = row.to_dict(); doc_data['ステータス'] = '完了'
-                                    # ▼ 追加：完了にした時間を新しく記録する
                                     doc_data['完了日時'] = firestore.SERVER_TIMESTAMP
                                     if '拠点' not in doc_data or pd.isna(doc_data.get('拠点')) or doc_data.get('拠点') == '未設定':
                                         doc_data['拠点'] = st.session_state.get('user_location', "未設定")
@@ -1647,7 +1651,6 @@ def main_app():
                                 if remaining_companies.empty:
                                     for index, common_row in common_docs_to_move.iterrows():
                                         doc_data = common_row.to_dict(); doc_data['ステータス'] = '完了'
-                                        # ▼ 追加：完了にした時間を新しく記録する
                                         doc_data['完了日時'] = firestore.SERVER_TIMESTAMP
                                         if '拠点' not in doc_data or pd.isna(doc_data.get('拠点')) or doc_data.get('拠点') == '未設定':
                                             doc_data['拠点'] = st.session_state.get('user_location', "未設定")
