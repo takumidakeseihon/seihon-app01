@@ -4,6 +4,7 @@ from datetime import datetime, time, timedelta, timezone
 from pathlib import Path
 import math
 import unicodedata # 最強の文字照合用ライブラリ
+import streamlit.components.v1 as components # ▼ 追加：自動スクロール機能を使うためのライブラリ
 
 # Firebaseライブラリをインポート
 import firebase_admin
@@ -1402,6 +1403,7 @@ def main_app():
                             col_exp_1, col_exp_2 = st.columns(2)
                             if col_exp_1.button("この製品に工程を追加", key=f"add_to_{product}", use_container_width=True):
                                 st.session_state.product_to_select = product
+                                st.session_state.scroll_to_top = True # ▼ 追加：ボタンが押されたら「一番上に戻る」フラグを立てる
                                 st.rerun()
                             if col_exp_2.button("この製品の作業を完了", key=f"complete_{product}", type="primary", use_container_width=True):
                                 handle_product_completion(product)
@@ -1703,6 +1705,21 @@ def main_app():
 st.set_page_config(layout="wide")
 
 st.markdown("<h1 style='font-size: clamp(1.2rem, 5vw, 2.5rem); padding-top: 1rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;'>📘 製本記録アプリ</h1>", unsafe_allow_html=True)
+
+# ▼▼▼ 追加：画面トップへの自動スクロール用スクリプト ▼▼▼
+if st.session_state.get('scroll_to_top', False):
+    components.html(
+        """
+        <script>
+            var mainEl = window.parent.document.querySelector('.main');
+            if (mainEl) { mainEl.scrollTo({ top: 0, behavior: 'smooth' }); }
+            else { window.parent.scrollTo({ top: 0, behavior: 'smooth' }); }
+        </script>
+        """,
+        height=0
+    )
+    st.session_state.scroll_to_top = False
+# ▲▲▲ 追加ここまで ▲▲▲
 
 if 'submit_disabled' not in st.session_state:
     st.session_state.submit_disabled = False
