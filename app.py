@@ -159,7 +159,8 @@ def load_from_firestore(_db, collection_name, active_only=False, days_limit=None
         query = _db.collection(collection_name)
         
         if days_limit:
-            docs = query.order_by("作成日時", direction=firestore.Query.DESCENDING).limit(days_limit).stream()
+            # ▼ 修正：日本語の項目名をシステムに認識させるため、バッククォート（`）で囲みます
+            docs = query.order_by("`作成日時`", direction=firestore.Query.DESCENDING).limit(days_limit).stream()
         else:
             docs = query.stream()
             
