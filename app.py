@@ -1066,9 +1066,10 @@ def show_admin_dashboard():
     existing_cols = [c for c in display_cols if c in filtered_df.columns]
     st.dataframe(filtered_df[existing_cols], use_container_width=True)
     
+    # ★ ここでも文字化け防止のため強制的にバイトデータに変換します
     export_cols = ['日付', '提出者', '拠点', '退勤時間', '機械の調子', 'ヒヤリハット', '漏れている作業', '特記事項']
     export_existing_cols = [c for c in export_cols if c in filtered_df.columns]
-    csv_data = filtered_df[export_existing_cols].to_csv(index=False, encoding='utf-8-sig').encode('utf-8-sig')
+    csv_data = filtered_df[export_existing_cols].to_csv(index=False).encode('utf-8-sig')
     
     st.download_button(
         label="📥 表示中の日報をCSV（エクセル用）でダウンロード",
@@ -1301,7 +1302,7 @@ def main_app():
     st.sidebar.button("データを更新", on_click=clear_cache_and_rerun, use_container_width=True)
     
     with st.sidebar.expander("🛠️ 管理者メニュー"):
-        st.markdown("**■ 予定表の手持アップロード**")
+        st.markdown("**■ 予定表の手動アップロード**")
         st.info("朝の自動更新が失敗した際のフェイルセーフです。")
         uploaded_file = st.file_uploader("予定表 (schedule.csv) をアップロード", type=['csv'], label_visibility="collapsed")
         if uploaded_file is not None:
@@ -1340,8 +1341,9 @@ def main_app():
                 filtered_reports = filtered_reports[final_cols]
                 filtered_reports = filtered_reports.sort_values(by=['日付', '拠点', '提出者'])
                 
-                # 文字化け防止のため utf-8-sig で出力
-                csv_data = filtered_reports.to_csv(index=False, encoding='utf-8-sig')
+                # ★ ここで文字化け防止のため強制的にバイトデータに変換します
+                csv_data = filtered_reports.to_csv(index=False).encode('utf-8-sig')
+                
                 st.download_button(
                     label="📥 CSVダウンロード",
                     data=csv_data,
