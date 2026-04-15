@@ -4,7 +4,7 @@ from datetime import datetime, time, timedelta, timezone
 from pathlib import Path
 import math
 import unicodedata # 最強の文字照合用ライブラリ
-import streamlit.components.v1 as components # ▼ 追加：自動スクロール機能を使うためのライブラリ
+import streamlit.components.v1 as components # 自動スクロール機能を使うためのライブラリ
 
 # Firebaseライブラリをインポート
 import firebase_admin
@@ -159,7 +159,7 @@ def load_from_firestore(_db, collection_name, active_only=False, days_limit=None
         query = _db.collection(collection_name)
         
         if days_limit:
-            docs = query.order_by("`作成日時`", direction=firestore.Query.DESCENDING).limit(days_limit).stream()
+            docs = query.order_by("作成日時", direction=firestore.Query.DESCENDING).limit(days_limit).stream()
         else:
             docs = query.stream()
             
@@ -434,7 +434,6 @@ def process_form(is_edit_mode=False, default_data=None):
             submit_button = col_btn1.form_submit_button("作業中として追加", use_container_width=True)
             complete_button = col_btn2.form_submit_button("この内容で最終完了", type="primary", use_container_width=True)
         
-        # ▼ 修正：重複して追加してしまったボタンを1つに統合しました ▼
         if col_btn3.form_submit_button("キャンセル"):
             st.session_state.sub_view = 'SELECT_PROCESS'
             st.session_state.pop('record_to_copy', None)
@@ -495,8 +494,6 @@ def process_form(is_edit_mode=False, default_data=None):
 
         if submit_button: run_validation_and_submit("作業中")
         if complete_button: run_validation_and_submit("完了")
-        
-        # （ここにあった重複したキャンセルボタンのコードは削除しました）
 
 def handle_db_write(operation, success_message, error_message, rerun_on_success=True):
     try:
@@ -506,7 +503,6 @@ def handle_db_write(operation, success_message, error_message, rerun_on_success=
             operation()
             st.session_state.success_msg = success_message
             st.session_state.sub_view = 'SELECT_PROCESS'
-            # ▼ 追加：記録が完了したらコピー用の記憶をリセットする
             st.session_state.pop('record_to_copy', None)
             if rerun_on_success:
                 load_from_firestore.clear()
@@ -733,19 +729,16 @@ def show_daily_report():
             today_tasks = today_df[involved_mask].sort_values('作成日時_dt')
             other_tasks = today_df[~involved_mask].sort_values('作成日時_dt')
             
-            # ▼▼▼ 追加：他の人の作業リストを「自分の拠点」のみに絞り込む ▼▼▼
             user_loc = st.session_state.get('user_location', "すべて")
             if user_loc in ["旭川", "札幌"] and not other_tasks.empty:
                 def is_same_location(row):
                     loc = row.get('拠点', '未設定')
                     if loc == user_loc: return True
-                    # 拠点が未設定の古いデータ等は、入力した人の所属拠点で判定する
                     if loc in ['未設定', ''] or pd.isna(loc):
                         worker = row.get('入力者名', '')
                         if WORKER_TO_LOCATION.get(worker) == user_loc: return True
                     return False
                 other_tasks = other_tasks[other_tasks.apply(is_same_location, axis=1)]
-            # ▲▲▲ 追加ここまで ▲▲▲
 
     st.markdown(f"<h3 style='font-size: clamp(1rem, 4vw, 1.4rem); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;' title='📋 {target_date.strftime('%m月%d日')} のあなたの作業履歴'>📋 {target_date.strftime('%m月%d日')} のあなたの作業履歴</h3>", unsafe_allow_html=True)
     
@@ -773,7 +766,6 @@ def show_daily_report():
             else:
                 helper_badge = "👑機長"
                 
-            # ▼ 変更：入力時間ではなく、開始時間と作業時間を表示
             start_t = row.get('開始時間', '')
             work_m = int(row.get('作業時間_分', 0))
             if work_m > 0:
@@ -802,8 +794,7 @@ def show_daily_report():
                 
                 qty_str = f"{qty:,}個"
                 
-                # ▼▼▼ 変更：スマホで見切れないように全体をコンパクトにする ▼▼▼
-                setup_badge = "🔧セット" if qty == 0 else "" # 「のみ」を削ってさらに短く
+                setup_badge = "🔧セット" if qty == 0 else "" 
                 machine_str = f"[{machine}]" if machine else ""
                 
                 start_t = row.get('開始時間', '')
@@ -816,12 +807,9 @@ def show_daily_report():
                 else:
                     time_str = f"{start_t}~" if start_t else "時間なし"
                 
-                # 「赤松 浩明」→「赤松」のように苗字（スペースの前）だけにして短縮する
                 worker_short = worker.split(" ")[0].split("　")[0] 
                 
-                # 一番重要な【製品名】を先頭に持ってくる！
                 label = f"【{product}】{process} ({worker_short}) | {time_str} | {machine_str}{setup_badge} {qty_str}"
-                # ▲▲▲ 変更ここまで ▲▲▲
                 
                 task_options[label] = row
                 
@@ -960,19 +948,17 @@ def show_daily_report():
             except Exception as e:
                 st.error(f"日報の送信に失敗しました: {e}")
 
-# --- 追加：管理者用ダッシュボード（日報確認機能） ---
+# --- 管理者用ダッシュボード（日報確認機能） ---
 def show_admin_dashboard():
     st.markdown("<h2 style='font-size: clamp(1.2rem, 5vw, 2rem); margin-bottom: 1rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;' title='👑 管理者ダッシュボード'>👑 管理者ダッシュボード</h2>", unsafe_allow_html=True)
     
     current_user = st.session_state.get('logged_in_user', '')
     is_admin = current_user in ["岳　匠", "福田 準也"]
     
-    # パスワード認証機能 (指定された管理者はパスワードを免除)
     if not st.session_state.get('admin_authenticated', False) and not is_admin:
         st.info("この画面は日報を確認する管理者専用の画面です。パスワードを入力してください。")
         password = st.text_input("パスワード", type="password")
         
-        # Secretsにパスワードが設定されていればそれを、なければ初期パスワード「admin1234」を使用します
         correct_password = st.secrets.get("ADMIN_PASSWORD", "admin1234") 
         
         if st.button("ログイン", type="primary"):
@@ -983,7 +969,6 @@ def show_admin_dashboard():
                 st.error("❌ パスワードが違います。")
         return
 
-    # === ここから下は認証に成功した管理者のみが見れる画面 ===
     if is_admin:
         st.success(f"✅ 管理者（{current_user}）としてログイン中")
     else:
@@ -994,12 +979,10 @@ def show_admin_dashboard():
         
     st.divider()
     
-    # ▼▼▼ 変更箇所：最新データに更新する専用ボタンを設置 ▼▼▼
     col1, col2, col3 = st.columns([1.5, 2, 1.5])
     with col1:
         target_date = st.date_input("📅 表示する日付", value=datetime.now(timezone(timedelta(hours=9))).date())
     with col2:
-        # 管理者の場合は初期選択を自分の拠点にする
         default_loc = "すべて"
         if current_user == "岳　匠": default_loc = "旭川"
         elif current_user == "福田 準也": default_loc = "札幌"
@@ -1010,7 +993,6 @@ def show_admin_dashboard():
     with col3:
         st.markdown("<div style='margin-top: 28px;'></div>", unsafe_allow_html=True)
         if st.button("🔄 最新の状況に更新", use_container_width=True):
-            # 古い記憶（キャッシュ）を強制的に消去して画面をリロードする
             load_from_firestore.clear()
             load_tasks_for_customer.clear()
             st.rerun()
@@ -1025,10 +1007,8 @@ def show_admin_dashboard():
         
         if not all_tasks_df.empty and '作成日時' in all_tasks_df.columns:
             all_tasks_df['作成日時_dt'] = pd.to_datetime(all_tasks_df['作成日時'], utc=True).dt.tz_convert('Asia/Tokyo')
-            
             today_tasks_df = all_tasks_df[all_tasks_df['作成日時_dt'].dt.date == target_date]
         
-    # 拠点に応じた対象メンバーのリストを取得
     if location_filter == "旭川":
         target_members = ASAHIKAWA_MEMBERS
     elif location_filter == "札幌":
@@ -1038,7 +1018,6 @@ def show_admin_dashboard():
         
     target_date_str = target_date.strftime('%Y-%m-%d')
     
-    # 提出済みデータの抽出
     filtered_df = pd.DataFrame()
     if not reports_df.empty:
         filtered_df = reports_df[reports_df['日付'] == target_date_str].copy()
@@ -1047,7 +1026,7 @@ def show_admin_dashboard():
             if location_filter != "すべて":
                 filtered_df = filtered_df[filtered_df['拠点'] == location_filter]
 
-    worked_members = set() # その日システムに名前が載った人のリスト
+    worked_members = set()
     if not today_tasks_df.empty:
         for _, row in today_tasks_df.iterrows():
             worker = row.get('入力者名')
@@ -1143,7 +1122,6 @@ def show_admin_dashboard():
                     else:
                         helper_badge = "👑機長"
                         
-                    # ▼ 変更：管理者画面の詳細リストでも開始時間と作業時間を表示
                     start_t = t_row.get('開始時間', '')
                     work_m = int(t_row.get('作業時間_分', 0))
                     if work_m > 0:
@@ -1179,7 +1157,7 @@ def show_admin_dashboard():
             if photo and isinstance(photo, str) and photo.startswith('data:image'):
                 st.image(photo, caption=f"{worker}さんからの添付写真", use_container_width=True)
 
-# --- 追加：Step1のフラグメント化（ロードのチラつき防止） ---
+# --- Step1のフラグメント化（ロードのチラつき防止） ---
 @st.fragment
 def render_step1_fragment(schedule_df, display_df, selected_location, product_to_location):
     st.markdown(f"<h3 style='font-size: clamp(0.9rem, 3.5vw, 1.4rem); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;'>Step 1: 新規工程を記録（{selected_location}）</h3>", unsafe_allow_html=True)
@@ -1274,7 +1252,7 @@ def render_step1_fragment(schedule_df, display_df, selected_location, product_to
                         if process_name in ["中綴じ", "無線綴じ", "糸かがり", "綴じ（カレンダー）"] and SCHEDULE_COL_PAGE_COUNT in schedule_df.columns:
                             page_count_val = pd.to_numeric(info.get(SCHEDULE_COL_PAGE_COUNT), errors='coerce')
                             st.session_state.default_page_count = int(page_count_val) if pd.notna(page_count_val) else 0
-                        
+                    
                 st.session_state.selected_product = product_name
                 st.session_state.selected_process = process_name
                 st.session_state.sub_view = 'INPUT_FORM'
@@ -1322,9 +1300,10 @@ def main_app():
         
     st.sidebar.button("データを更新", on_click=clear_cache_and_rerun, use_container_width=True)
     
-    with st.sidebar.expander("🛠️ 管理者メニュー (CSV手動更新)"):
-        st.info("朝の自動更新が失敗した場合などに、ここから今日の予定表を一時的に読み込ませることができます。")
-        uploaded_file = st.file_uploader("予定表 (schedule.csv) をアップロード", type=['csv'])
+    with st.sidebar.expander("🛠️ 管理者メニュー"):
+        st.markdown("**■ 予定表の手持アップロード**")
+        st.info("朝の自動更新が失敗した際のフェイルセーフです。")
+        uploaded_file = st.file_uploader("予定表 (schedule.csv) をアップロード", type=['csv'], label_visibility="collapsed")
         if uploaded_file is not None:
             try:
                 df = pd.read_csv(uploaded_file, encoding="utf-8-sig")
@@ -1335,6 +1314,46 @@ def main_app():
                     st.rerun()
             except Exception as e:
                 st.error(f"読み込みエラー: {e}")
+
+        st.divider()
+        st.markdown("**■ 日報データの抽出 (CSV)**")
+        dl_start = st.date_input("開始日", value=datetime.now(timezone(timedelta(hours=9))).date())
+        dl_end = st.date_input("終了日", value=datetime.now(timezone(timedelta(hours=9))).date())
+        
+        # 抽出用データの準備
+        r_df = load_from_firestore(db, "daily_reports")
+        if not r_df.empty and '日付' in r_df.columns:
+            mask = (r_df['日付'] >= dl_start.strftime('%Y-%m-%d')) & (r_df['日付'] <= dl_end.strftime('%Y-%m-%d'))
+            filtered_reports = r_df[mask].copy()
+            
+            if not filtered_reports.empty:
+                # 拠点情報の追加と画像データ等（長すぎる文字）の整理
+                if '提出者' in filtered_reports.columns:
+                    filtered_reports['拠点'] = filtered_reports['提出者'].map(WORKER_TO_LOCATION).fillna('未設定')
+                if '写真データ' in filtered_reports.columns:
+                    filtered_reports['写真添付'] = filtered_reports['写真データ'].apply(lambda x: "あり" if str(x).startswith("data:image") else "なし")
+                    filtered_reports = filtered_reports.drop(columns=['写真データ'])
+                
+                # 列の並び替えとソート（漏れている作業も追加）
+                cols_order = ['日付', '拠点', '提出者', '退勤時間', '疲れ具合', '機械の調子', 'ヒヤリハット', '漏れている作業', '特記事項', '関連タスク数', '写真添付', '作成日時']
+                final_cols = [c for c in cols_order if c in filtered_reports.columns] + [c for c in filtered_reports.columns if c not in cols_order]
+                filtered_reports = filtered_reports[final_cols]
+                filtered_reports = filtered_reports.sort_values(by=['日付', '拠点', '提出者'])
+                
+                # 文字化け防止のため utf-8-sig で出力
+                csv_data = filtered_reports.to_csv(index=False, encoding='utf-8-sig')
+                st.download_button(
+                    label="📥 CSVダウンロード",
+                    data=csv_data,
+                    file_name=f"日報データ_{dl_start.strftime('%Y%m%d')}-{dl_end.strftime('%Y%m%d')}.csv",
+                    mime="text/csv",
+                    type="primary",
+                    use_container_width=True
+                )
+            else:
+                st.caption("指定された期間の日報はありません。")
+        else:
+            st.caption("日報データがまだ登録されていません。")
 
     main_view = st.radio(
         "メニューを選択", 
@@ -1430,13 +1449,12 @@ def main_app():
                             col_exp_1, col_exp_2 = st.columns(2)
                             if col_exp_1.button("この製品に工程を追加", key=f"add_to_{product}", use_container_width=True):
                                 st.session_state.product_to_select = product
-                                st.session_state.scroll_to_top = True # ▼ 追加：ボタンが押されたら「一番上に戻る」フラグを立てる
+                                st.session_state.scroll_to_top = True
                                 st.rerun()
                             if col_exp_2.button("この製品の作業を完了", key=f"complete_{product}", type="primary", use_container_width=True):
                                 handle_product_completion(product)
                             st.divider()
                             for index, row in group_df.iterrows():
-                                # ▼ 変更：ボタンを置くスペースを確保するために3列に分割
                                 c1, c2, c3 = st.columns([4, 1.5, 1.5])
                                 with c1:
                                     worker_name_display = row.get('入力者名', '不明')
@@ -1457,11 +1475,9 @@ def main_app():
                                         st.session_state.record_to_edit = row.to_dict()
                                         st.session_state.sub_view = 'EDIT_FORM'
                                         st.rerun()
-                                # ▼ 追加：「続きを記録する（コピー）」ボタン
                                 with c3:
                                     if st.button("🔁続き", key=f"copy_{row['id']}", help="この作業の情報を引き継いで、新しく記録します", use_container_width=True):
                                         copy_data = row.to_dict()
-                                        # 新しい記録になるので、時間や出来数、セット情報などは白紙に戻す
                                         copy_data['開始時間'] = ""
                                         copy_data['終了時間'] = ""
                                         copy_data['作業時間_分'] = 60 if copy_data.get('工程名') == "断裁" else 0
@@ -1469,8 +1485,8 @@ def main_app():
                                         copy_data['備考'] = ""
                                         copy_data['セット人数'] = 0.0
                                         copy_data['セット時間_分'] = 0
-                                        copy_data['共同作業者'] = [] # 共同作業者もリセット
-                                        copy_data['入力者名'] = st.session_state.logged_in_user # 自分が続きをやる扱いにする
+                                        copy_data['共同作業者'] = []
+                                        copy_data['入力者名'] = st.session_state.logged_in_user
                                         
                                         if 'id' in copy_data: del copy_data['id']
                                         if '記録ID' in copy_data: del copy_data['記録ID']
@@ -1479,7 +1495,7 @@ def main_app():
                                         st.session_state.selected_product = copy_data.get('製品名', '')
                                         st.session_state.selected_process = copy_data.get('工程名', '')
                                         st.session_state.sub_view = 'INPUT_FORM'
-                                        st.session_state.scroll_to_top = True # 自動で上に戻す
+                                        st.session_state.scroll_to_top = True
                                         st.rerun()
                                         
                                 with st.expander("🗑️ 削除"):
@@ -1498,7 +1514,6 @@ def main_app():
                                 st.divider()
                                 
         elif st.session_state.sub_view == 'INPUT_FORM':
-            # ▼ 変更：コピーデータがある場合は、それを元に新規入力フォームを開く
             if 'record_to_copy' in st.session_state:
                 process_form(is_edit_mode=False, default_data=st.session_state.record_to_copy)
             else:
@@ -1762,24 +1777,20 @@ def main_app():
 
 st.set_page_config(layout="wide")
 
-# ▼▼▼ 追加：スマホのキーボードがセレクトボックスで勝手に出るのを防ぐ裏技 ▼▼▼
+# ▼▼▼ スマホのキーボードがセレクトボックスで勝手に出るのを防ぐ裏技 ▼▼▼
 components.html(
     """
     <script>
         const doc = window.parent.document;
         function disableSelectKeyboard() {
-            // Streamlitのセレクトボックス(プルダウン)内部の入力欄をすべて取得
             const inputs = doc.querySelectorAll('div[data-baseweb="select"] input');
             inputs.forEach(input => {
-                // inputmode="none" を設定することで、スマホのキーボードがポップアップしなくなる
                 if (input.getAttribute('inputmode') !== 'none') {
                     input.setAttribute('inputmode', 'none');
                 }
             });
         }
-        // 即時実行
         disableSelectKeyboard();
-        // 画面の要素が変化したときにも常に監視して適用する
         const observer = new MutationObserver(disableSelectKeyboard);
         observer.observe(doc.body, { childList: true, subtree: true });
     </script>
@@ -1790,7 +1801,7 @@ components.html(
 
 st.markdown("<h1 style='font-size: clamp(1.2rem, 5vw, 2.5rem); padding-top: 1rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;'>📘 製本記録アプリ</h1>", unsafe_allow_html=True)
 
-# ▼▼▼ 追加：画面トップへの自動スクロール用スクリプト ▼▼▼
+# ▼▼▼ 画面トップへの自動スクロール用スクリプト ▼▼▼
 if st.session_state.get('scroll_to_top', False):
     components.html(
         """
