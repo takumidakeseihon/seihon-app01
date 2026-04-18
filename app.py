@@ -159,7 +159,6 @@ def load_from_firestore(_db, collection_name, active_only=False, days_limit=None
         query = _db.collection(collection_name)
         
         if days_limit:
-            # ▼ 修正：日本語の項目名をシステムに認識させるため、バッククォート（`）で囲みます
             docs = query.order_by("`作成日時`", direction=firestore.Query.DESCENDING).limit(days_limit).stream()
         else:
             docs = query.stream()
@@ -688,8 +687,13 @@ def show_daily_report():
             submitted_report = my_target_reports.iloc[0].to_dict()
             
     if is_target_submitted:
+        arrive_time = submitted_report.get("出勤時間", "早出なし")
         leave_time = submitted_report.get("退勤時間", "不明")
-        st.success(f"🎉 **この日の日報はすでに提出済みです！** (退勤記録: {leave_time})")
+        
+        arr_disp = arrive_time if "なし" not in arrive_time else "通常"
+        lev_disp = leave_time if "なし" not in leave_time else "定時"
+        
+        st.success(f"🎉 **この日の日報はすでに提出済みです！** (出勤: {arr_disp} / 退勤: {lev_disp})")
         with st.expander("提出した内容を確認する"):
             if submitted_report.get('漏れている作業'):
                 st.write(f"- **追加申告した作業:** {submitted_report.get('漏れている作業', '')}")
@@ -861,24 +865,36 @@ def show_daily_report():
     st.divider()
     
     with st.form("daily_report_form"):
-        st.markdown("<h3 style='font-size: clamp(1rem, 4vw, 1.4rem); margin-bottom: 0.5rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;' title='⏰ 退勤時間の記録（残業申請）'>⏰ 退勤時間の記録（残業申請）</h3>", unsafe_allow_html=True)
-        st.info("定時の17:30を超えて作業する場合（残業した場合）に退勤時間を選択してください。")
+        st.markdown("<h3 style='font-size: clamp(1rem, 4vw, 1.4rem); margin-bottom: 0.5rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;' title='⏰ 出退勤時間の記録（早出・残業申請）'>⏰ 出退勤時間の記録（早出・残業申請）</h3>", unsafe_allow_html=True)
+        st.info("早出をした場合や、定時の17:30を超えて作業した場合（残業した場合）に時間を設定してください。")
         
-        time_options = ["残業なし（定時退社）"] + [f"{h:02d}:{m:02d}" for h in range(17, 24) for m in (0, 15, 30, 45) if (h == 17 and m >= 45) or h > 17]
+        col_time1, col_time2 = st.columns(2)
         
-        default_time_str = "残業なし（定時退社）"
-        if is_target_submitted:
-            default_time_str = submitted_report.get("退勤時間", "残業なし（定時退社）")
-        elif target_date == today:
-            now_dt = datetime.now(timezone(timedelta(hours=9)))
-            if now_dt.hour >= 17:
-                rounded_minute = (now_dt.minute // 15) * 15
-                guess_time = f"{now_dt.hour:02d}:{rounded_minute:02d}"
-                if guess_time in time_options:
-                    default_time_str = guess_time
+        with col_time1:
+            arrive_time_options = ["早出なし（通常出勤）"] + [f"{h:02d}:{m:02d}" for h in range(5, 10) for m in (0, 15, 30, 45)]
+            arrive_default_time_str = "早出なし（通常出勤）"
+            if is_target_submitted:
+                arrive_default_time_str = submitted_report.get("出勤時間", "早出なし（通常出勤）")
+                
+            arrive_default_index = arrive_time_options.index(arrive_default_time_str) if arrive_default_time_str in arrive_time_options else 0
+            arrive_time_str = st.selectbox("出勤時間（早出の場合）", arrive_time_options, index=arrive_default_index)
+
+        with col_time2:
+            time_options = ["残業なし（定時退社）"] + [f"{h:02d}:{m:02d}" for h in range(17, 24) for m in (0, 15, 30, 45) if (h == 17 and m >= 45) or h > 17]
             
-        default_index = time_options.index(default_time_str) if default_time_str in time_options else 0
-        leave_time_str = st.selectbox("退勤時間", time_options, index=default_index)
+            default_time_str = "残業なし（定時退社）"
+            if is_target_submitted:
+                default_time_str = submitted_report.get("退勤時間", "残業なし（定時退社）")
+            elif target_date == today:
+                now_dt = datetime.now(timezone(timedelta(hours=9)))
+                if now_dt.hour >= 17:
+                    rounded_minute = (now_dt.minute // 15) * 15
+                    guess_time = f"{now_dt.hour:02d}:{rounded_minute:02d}"
+                    if guess_time in time_options:
+                        default_time_str = guess_time
+                
+            default_index = time_options.index(default_time_str) if default_time_str in time_options else 0
+            leave_time_str = st.selectbox("退勤時間（残業の場合）", time_options, index=default_index)
         
         st.divider()
         st.markdown("<h3 style='font-size: clamp(1rem, 4vw, 1.4rem); margin-bottom: 0.5rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;' title='💡 報告事項'>💡 報告事項</h3>", unsafe_allow_html=True)
@@ -926,6 +942,7 @@ def show_daily_report():
                 "提出者": user,
                 "日付": target_date.strftime('%Y-%m-%d'),
                 "作成日時": firestore.SERVER_TIMESTAMP,
+                "出勤時間": arrive_time_str,
                 "退勤時間": leave_time_str, 
                 "漏れている作業": missing_work,
                 "機械の調子": machine_cond,
@@ -1063,12 +1080,12 @@ def show_admin_dashboard():
         st.info(f"{location_filter}拠点の {target_date_str} の日報はまだ提出されていません。")
         return
         
-    display_cols = ['提出者', '拠点', '退勤時間', '機械の調子', 'ヒヤリハット']
+    display_cols = ['提出者', '拠点', '出勤時間', '退勤時間', '機械の調子', 'ヒヤリハット']
     existing_cols = [c for c in display_cols if c in filtered_df.columns]
     st.dataframe(filtered_df[existing_cols], use_container_width=True)
     
     # ★ ここでも文字化け防止のため強制的にバイトデータに変換します
-    export_cols = ['日付', '提出者', '拠点', '退勤時間', '機械の調子', 'ヒヤリハット', '漏れている作業', '特記事項']
+    export_cols = ['日付', '提出者', '拠点', '出勤時間', '退勤時間', '機械の調子', 'ヒヤリハット', '漏れている作業', '特記事項']
     export_existing_cols = [c for c in export_cols if c in filtered_df.columns]
     csv_data = filtered_df[export_existing_cols].to_csv(index=False).encode('utf-8-sig')
     
@@ -1341,7 +1358,7 @@ def main_app():
                     filtered_reports = filtered_reports.drop(columns=['写真データ'])
                 
                 # 列の並び替えとソート（漏れている作業も追加）
-                cols_order = ['日付', '拠点', '提出者', '退勤時間', '疲れ具合', '機械の調子', 'ヒヤリハット', '漏れている作業', '特記事項', '関連タスク数', '写真添付', '作成日時']
+                cols_order = ['日付', '拠点', '提出者', '出勤時間', '退勤時間', '疲れ具合', '機械の調子', 'ヒヤリハット', '漏れている作業', '特記事項', '関連タスク数', '写真添付', '作成日時']
                 final_cols = [c for c in cols_order if c in filtered_reports.columns] + [c for c in filtered_reports.columns if c not in cols_order]
                 filtered_reports = filtered_reports[final_cols]
                 filtered_reports = filtered_reports.sort_values(by=['日付', '拠点', '提出者'])
