@@ -159,7 +159,8 @@ def load_from_firestore(_db, collection_name, active_only=False, days_limit=None
         query = _db.collection(collection_name)
         
         if days_limit:
-            docs = query.order_by("作成日時", direction=firestore.Query.DESCENDING).limit(days_limit).stream()
+            # ▼ 修正：日本語の項目名をシステムに認識させるため、バッククォート（`）で囲みます
+            docs = query.order_by("`作成日時`", direction=firestore.Query.DESCENDING).limit(days_limit).stream()
         else:
             docs = query.stream()
             
@@ -1086,9 +1087,13 @@ def show_admin_dashboard():
     for idx, row in filtered_df.iterrows():
         worker = row.get('提出者', '不明')
         loc = row.get('拠点', '')
-        leave_time = row.get('退勤時間', '')
+        arrive_time = row.get('出勤時間', '早出なし')
+        leave_time = row.get('退勤時間', '残業なし')
         
-        with st.expander(f"👤 {worker} ({loc}) - 退勤: {leave_time}"):
+        arr_disp = arrive_time if "なし" not in arrive_time else "通常"
+        lev_disp = leave_time if "なし" not in leave_time else "定時"
+        
+        with st.expander(f"👤 {worker} ({loc}) - 出勤: {arr_disp} / 退勤: {lev_disp}"):
             worker_tasks = pd.DataFrame()
             if not today_tasks_df.empty:
                 def is_worker_involved(task_row):
