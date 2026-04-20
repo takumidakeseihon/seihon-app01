@@ -690,6 +690,10 @@ def show_daily_report():
         arrive_time = submitted_report.get("出勤時間", "早出なし")
         leave_time = submitted_report.get("退勤時間", "不明")
         
+        # ▼ 追加：過去のデータなど「出勤時間」がない場合のエラー（NaN）対策
+        arrive_time = "早出なし" if pd.isna(arrive_time) else str(arrive_time)
+        leave_time = "不明" if pd.isna(leave_time) else str(leave_time)
+        
         arr_disp = arrive_time if "なし" not in arrive_time else "通常"
         lev_disp = leave_time if "なし" not in leave_time else "定時"
         
@@ -1106,6 +1110,10 @@ def show_admin_dashboard():
         loc = row.get('拠点', '')
         arrive_time = row.get('出勤時間', '早出なし')
         leave_time = row.get('退勤時間', '残業なし')
+        
+        # ▼ 追加：過去のデータなど「出勤時間」がない場合のエラー（NaN）対策
+        arrive_time = "早出なし" if pd.isna(arrive_time) else str(arrive_time)
+        leave_time = "残業なし" if pd.isna(leave_time) else str(leave_time)
         
         arr_disp = arrive_time if "なし" not in arrive_time else "通常"
         lev_disp = leave_time if "なし" not in leave_time else "定時"
