@@ -17,6 +17,26 @@ import base64
 import io
 from PIL import Image
 
+# ==========================================
+# ▼▼▼ ページ設定とズーム防止設定（必ず一番上に配置） ▼▼▼
+# ==========================================
+st.set_page_config(page_title="製本記録アプリ", layout="wide")
+
+# スマホの入力欄で勝手にズームされるのを防ぐ設定
+st.markdown(
+    """
+    <style>
+    input, textarea, select {
+        font-size: 16px !important;
+    }
+    </style>
+    """,
+    unsafe_allow_html=True
+)
+# ==========================================
+# ▲▲▲ 設定ここまで ▲▲▲
+# ==========================================
+
 # --- 共通テキストクリーンアップ関数（絶対マッチさせる用） ---
 def clean_text(text):
     if pd.isna(text): return ""
@@ -1533,21 +1553,21 @@ def main_app():
                                         st.session_state.scroll_to_top = True
                                         st.rerun()
                                         
-                                with st.expander("🗑️ 削除"):
-                                    st.markdown("本当にこの工程を削除しますか？")
-                                    if st.button("はい、削除します", key=f"delete_confirm_{row['id']}", type="primary", use_container_width=True):
-                                        try:
-                                            if not firebase_admin._apps:
-                                                init_firebase()
-                                            db_del = firestore.client()
-                                            db_del.collection("in_progress").document(row['id']).delete()
-                                            load_from_firestore.clear()
-                                            st.success(f"作業記録 (ID: {row['id']}) を削除しました。")
-                                            st.rerun()
-                                        except Exception as e:
-                                            st.error(f"削除中にエラーが発生しました: {e}")
-                                st.divider()
-                                
+                            with st.expander("🗑️ 削除"):
+                                st.markdown("本当にこの工程を削除しますか？")
+                                if st.button("はい、削除します", key=f"delete_confirm_{row['id']}", type="primary", use_container_width=True):
+                                    try:
+                                        if not firebase_admin._apps:
+                                            init_firebase()
+                                        db_del = firestore.client()
+                                        db_del.collection("in_progress").document(row['id']).delete()
+                                        load_from_firestore.clear()
+                                        st.success(f"作業記録 (ID: {row['id']}) を削除しました。")
+                                        st.rerun()
+                                    except Exception as e:
+                                        st.error(f"削除中にエラーが発生しました: {e}")
+                            st.divider()
+                            
         elif st.session_state.sub_view == 'INPUT_FORM':
             if 'record_to_copy' in st.session_state:
                 process_form(is_edit_mode=False, default_data=st.session_state.record_to_copy)
@@ -1698,7 +1718,7 @@ def main_app():
                                         st.session_state.success_msg = f"「{company_name}」を削除しました。"
                                         st.rerun()
 
-                            st.divider()
+                    st.divider()
 
                     st.write("**2. 登録する工程内容**")
                     process_name = st.selectbox("工程名", NAIRE_PROCESS_OPTIONS, key="bulk_process_name")
@@ -1810,8 +1830,6 @@ def main_app():
     elif main_view == "👑 管理者画面":
         show_admin_dashboard()
 
-st.set_page_config(layout="wide")
-
 # ▼▼▼ スマホのキーボードがセレクトボックスで勝手に出るのを防ぐ裏技 ▼▼▼
 components.html(
     """
@@ -1832,7 +1850,6 @@ components.html(
     """,
     height=0, width=0
 )
-# ▲▲▲ 追加ここまで ▲▲▲
 
 st.markdown("<h1 style='font-size: clamp(1.2rem, 5vw, 2.5rem); padding-top: 1rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;'>📘 製本記録アプリ</h1>", unsafe_allow_html=True)
 
@@ -1849,7 +1866,6 @@ if st.session_state.get('scroll_to_top', False):
         height=0
     )
     st.session_state.scroll_to_top = False
-# ▲▲▲ 追加ここまで ▲▲▲
 
 if 'submit_disabled' not in st.session_state:
     st.session_state.submit_disabled = False
