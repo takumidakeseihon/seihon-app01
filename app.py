@@ -1046,10 +1046,16 @@ def show_admin_dashboard():
         if not all_tasks_df.empty and '作成日時' in all_tasks_df.columns:
             all_tasks_df['作成日時_dt'] = pd.to_datetime(all_tasks_df['作成日時'], utc=True).dt.tz_convert('Asia/Tokyo')
 
-    # ★ここで画面を「タブ」で2つに分けます！
-    tab_report, tab_fix = st.tabs(["📊 日報・作業記録の確認", "🛠️ 未照合データの一括修正"])
+    # ★ここで画面を切り替えます（タブだと再読み込みで戻ってしまうため、ラジオボタンで状態を保持）
+    admin_view = st.radio(
+        "機能を選択",
+        ["📊 日報・作業記録の確認", "🛠️ 未照合データの一括修正"],
+        horizontal=True,
+        key="admin_view_selector",
+        label_visibility="collapsed"
+    )
     
-    with tab_report:
+    if admin_view == "📊 日報・作業記録の確認":
         col1, col2, col3 = st.columns([1.5, 2, 1.5])
         with col1:
             target_date = st.date_input("📅 表示する日付", value=datetime.now(timezone(timedelta(hours=9))).date())
@@ -1226,7 +1232,7 @@ def show_admin_dashboard():
                     if photo and isinstance(photo, str) and photo.startswith('data:image'):
                         st.image(photo, caption=f"{worker}さんからの添付写真", use_container_width=True)
 
-    with tab_fix:
+    elif admin_view == "🛠️ 未照合データの一括修正":
         st.markdown("現場が「仮の名前」で入力した過去の作業記録を、予定表の「正式な名前」に一括で書き換えます。")
         
         st.markdown("##### Step 1: 検索条件と予定表データの設定")
