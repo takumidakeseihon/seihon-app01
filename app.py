@@ -1024,7 +1024,312 @@ def show_admin_dashboard():
         
     st.divider()
     
-    col1, col2, col3 = st.columns([1.5, 2, 1.5])
+    with st.spinner("データベースから日報と作業記録を取得中..."):
+        reports_df = load_from_firestore(db, "daily_reports")
+        
+        in_prog_df = load_from_firestore(db, "in_progress")
+        if not in_prog_df.empty:
+            in_prog_df['_collection'] = "in_progress"
+            
+        comp_df = load_from_firestore(db, "completed", days_limit=3000)
+        if not comp_df.empty:
+            comp_df['_collection'] = "completed"
+            
+        if not in_prog_df.empty or not comp_df.empty:
+            all_tasks_df = pd.concat([in_prog_df, comp_df], ignore_index=True)
+        else:
+            all_tasks_df = pd.DataFrame()
+
+        if not all_tasks_df.empty and '作成日時' in all_tasks_df.columns:
+            all_tasks_df['作成日時_dt'] = pd.to_datetime(all_tasks_df['作成日時'], utc=True).dt.tz_convert('Asia/Tokyo')
+
+    # ★ここで画面を「タブ」で2つに分けます！
+    tab_report, tab_fix = st.tabs(["📊 日報・作業記録の確認", "🛠️ 未照合データの一括修正"])
+    
+    with tab_report:
+        col1, col2, col3 = st.columns([1.5, 2, 1.5])
+        with col1:
+            target_date = st.date_input("📅 表示する日付", value=datetime.now(timezone(timedelta(hours=9))).date())
+        with col2:
+            default_loc = "すべて"
+            if current_user == "岳　匠": default_loc = "旭川"
+            elif current_user == "福田 準也": default_loc = "札幌"
+            
+            loc_options = ["すべて", "旭川", "札幌"]
+            default_idx = loc_options.index(default_loc)
+            location_filter = st.radio("🏢 表示する拠点", loc_options, index=default_idx, horizontal=True)
+        with col3:
+            st.markdown("<div style='margin-top: 28px;'></div>", unsafe_allow_html=True)
+            if st.button("🔄 最新の状況に更新", key="refresh_report", use_container_width=True):
+                load_from_firestore.clear()
+                load_tasks_for_customer.clear()
+                st.rerun()
+                
+        today_tasks_df = pd.DataFrame()
+        if not all_tasks_df.empty and '作成日時_dt' in all_tasks_df.columns:
+            today_tasks_df = all_tasks_df[all_tasks_df['作成日時_dt'].dt.date == target_date]
+            
+        if location_filter == "旭川":
+            target_members = ASAHIKAWA_MEMBERS
+        elif location_filter == "札幌":
+            target_members = SAPPORO_MEMBERS
+        else:
+            target_members = WORKER_NAMES
+            
+        target_date_str = target_date.strftime('%Y-%m-%d')
+        
+        filtered_df = pd.DataFrame()
+        if not reports_df.empty:
+            filtered_df = reports_df[reports_df['日付'] == target_date_str].copy()
+            if not filtered_df.empty:
+                filtered_df['拠点'] = filtered_df['提出者'].map(WORKER_TO_LOCATION).fillna("未設定")
+                if location_filter != "すべて":
+                    filtered_df = filtered_df[filtered_df['拠点'] == location_filter]
+
+        worked_members = set()
+        if not today_tasks_df.empty:
+            for _, row in today_tasks_df.iterrows():
+                worker = row.get('入力者名')
+                if pd.notna(worker) and worker in target_members:
+                    worked_members.add(worker)
+                
+                co_workers = row.get('共同作業者', [])
+                if isinstance(co_workers, list):
+                    for cw in co_workers:
+                        if cw in target_members: worked_members.add(cw)
+                elif isinstance(co_workers, str) and co_workers:
+                    for cw in [w.strip() for w in co_workers.split(',')]:
+                        if cw in target_members: worked_members.add(cw)
+
+        submitted_members = filtered_df['提出者'].tolist() if not filtered_df.empty else []
+        missing_members = sorted(list(worked_members - set(submitted_members)))
+        
+        st.markdown(f"<h3 style='font-size: clamp(1rem, 4vw, 1.4rem);'>🚨 未提出者 ({len(missing_members)}名)</h3>", unsafe_allow_html=True)
+        if missing_members:
+            st.error("、 ".join(missing_members))
+            st.caption("※今日システムに作業記録があるにも関わらず、日報が未提出の方です。（休みの人は表示されません）")
+        else:
+            if worked_members:
+                st.success("今日作業記録がある方は全員提出済みです！素晴らしい！🎉")
+            else:
+                st.info("この日の作業記録はまだありません。")
+            
+        st.divider()
+            
+        st.markdown(f"<h3 style='font-size: clamp(1rem, 4vw, 1.4rem);'>📊 提出済み日報 ({len(submitted_members)}件)</h3>", unsafe_allow_html=True)
+        
+        if filtered_df.empty:
+            st.info(f"{location_filter}拠点の {target_date_str} の日報はまだ提出されていません。")
+        else:
+            display_cols = ['提出者', '拠点', '出勤時間', '退勤時間', '機械の調子', 'ヒヤリハット']
+            existing_cols = [c for c in display_cols if c in filtered_df.columns]
+            st.dataframe(filtered_df[existing_cols], use_container_width=True)
+            
+            export_cols = ['日付', '提出者', '拠点', '出勤時間', '退勤時間', '機械の調子', 'ヒヤリハット', '漏れている作業', '特記事項']
+            export_existing_cols = [c for c in export_cols if c in filtered_df.columns]
+            csv_data = filtered_df[export_existing_cols].to_csv(index=False).encode('utf-8-sig')
+            
+            st.download_button(
+                label="📥 表示中の日報をCSV（エクセル用）でダウンロード",
+                data=csv_data,
+                file_name=f"日報一覧_{target_date_str}_{location_filter}.csv",
+                mime="text/csv",
+                type="primary",
+                use_container_width=True
+            )
+            
+            st.divider()
+            st.subheader("📝 詳細な報告内容（タップで展開）")
+            
+            for idx, row in filtered_df.iterrows():
+                worker = row.get('提出者', '不明')
+                loc = row.get('拠点', '')
+                arrive_time = row.get('出勤時間', '早出なし')
+                leave_time = row.get('退勤時間', '残業なし')
+                
+                arrive_time = "早出なし" if pd.isna(arrive_time) else str(arrive_time)
+                leave_time = "残業なし" if pd.isna(leave_time) else str(leave_time)
+                
+                arr_disp = arrive_time if "なし" not in arrive_time else "通常"
+                lev_disp = leave_time if "なし" not in leave_time else "定時"
+                
+                with st.expander(f"👤 {worker} ({loc}) - 出勤: {arr_disp} / 退勤: {lev_disp}"):
+                    worker_tasks = pd.DataFrame()
+                    if not today_tasks_df.empty:
+                        def is_worker_involved(task_row):
+                            if task_row.get('入力者名') == worker: return True
+                            cw = task_row.get('共同作業者', [])
+                            if isinstance(cw, list) and worker in cw: return True
+                            if isinstance(cw, str) and worker in cw: return True
+                            return False
+                        
+                        involved_mask = today_tasks_df.apply(is_worker_involved, axis=1)
+                        worker_tasks = today_tasks_df[involved_mask].sort_values('作成日時_dt')
+
+                    st.markdown("##### 📋 今日の作業内容")
+                    if worker_tasks.empty:
+                        st.write("システムの作業記録はありません。")
+                    else:
+                        for _, t_row in worker_tasks.iterrows():
+                            product = t_row.get('製品名', '名称不明')
+                            process = t_row.get('工程名', '工程不明')
+                            detail = t_row.get('詳細', '')
+                            qty = int(t_row.get('出来数', 0))
+                            machine = t_row.get('使用機械', '')
+                            is_helper = t_row.get('入力者名') != worker
+                            
+                            qty_str = f"{qty:,}個"
+                            setup_badge = " 🔧セットのみ" if qty == 0 else ""
+                            machine_str = f"[{machine}]" if machine else ""
+                            
+                            if is_helper:
+                                input_user = t_row.get('入力者名', '不明')
+                                helper_badge = f"👤補助 (機長:{input_user})"
+                            else:
+                                helper_badge = "👑機長"
+                                
+                            start_t = t_row.get('開始時間', '')
+                            work_m = int(t_row.get('作業時間_分', 0))
+                            if work_m > 0:
+                                h = work_m // 60
+                                m = work_m % 60
+                                wt_str = f"{h}時間{m}分" if h > 0 and m > 0 else (f"{h}時間" if h > 0 else f"{m}分")
+                                time_str = f"{start_t}開始 ({wt_str})" if start_t else f"計{wt_str}"
+                            else:
+                                time_str = f"{start_t}開始" if start_t else "時間記録なし"
+                            
+                            st.markdown(f"- `{time_str}` `{helper_badge}` **{product}** ＞ {process} {machine_str}{setup_badge} ({qty_str}) / 詳細: {detail}")
+                    st.divider()
+
+                    st.markdown(f"**🔧 機械の調子:** {row.get('機械の調子', '未記入')}")
+                    
+                    hiyari = row.get('ヒヤリハット', '未記入')
+                    if "あり" in hiyari:
+                        st.markdown(f"**⚠️ ヒヤリハット:** <span style='color:red;'>{hiyari}</span>", unsafe_allow_html=True)
+                    else:
+                        st.markdown(f"**⚠️ ヒヤリハット:** {hiyari}")
+                    
+                    missing = row.get('漏れている作業', '')
+                    if missing:
+                        st.markdown(f"**✍️ 追加申告作業:**\n> {missing}")
+                        
+                    note = row.get('特記事項', '')
+                    if note:
+                        st.markdown(f"**💡 特記事項:**\n> {note}")
+                    else:
+                        st.markdown("**💡 特記事項:** なし")
+                        
+                    photo = row.get('写真データ', '')
+                    if photo and isinstance(photo, str) and photo.startswith('data:image'):
+                        st.image(photo, caption=f"{worker}さんからの添付写真", use_container_width=True)
+
+    with tab_fix:
+        st.markdown("現場が「仮の名前」で入力した過去の作業記録を、予定表の「正式な名前」に一括で書き換えます。")
+        
+        st.markdown("##### Step 1: 検索条件と予定表データの設定")
+        col_date1, col_date2 = st.columns(2)
+        with col_date1:
+            fix_start_date = st.date_input("検索開始日", value=datetime.now(timezone(timedelta(hours=9))).date() - timedelta(days=7), key="fix_start")
+        with col_date2:
+            fix_end_date = st.date_input("検索終了日", value=datetime.now(timezone(timedelta(hours=9))).date(), key="fix_end")
+            
+        st.info("💡 過去の品名に紐付ける場合は、当時の予定表(CSV)をここにアップロードしてください。現場の入力画面には影響しません。")
+        uploaded_past_csv = st.file_uploader("過去の予定表 (schedule.csv) ※任意", type=['csv'], key="past_schedule_upload")
+        
+        target_tasks_df = pd.DataFrame()
+        if not all_tasks_df.empty and '作成日時_dt' in all_tasks_df.columns:
+            mask = (all_tasks_df['作成日時_dt'].dt.date >= fix_start_date) & (all_tasks_df['作成日時_dt'].dt.date <= fix_end_date)
+            target_tasks_df = all_tasks_df[mask].copy()
+
+        existing_products = []
+        if not target_tasks_df.empty and '製品名' in target_tasks_df.columns:
+            existing_products = sorted(target_tasks_df['製品名'].dropna().astype(str).unique().tolist())
+            
+        if uploaded_past_csv is not None:
+            try:
+                schedule_df_for_fix = pd.read_csv(uploaded_past_csv, encoding="utf-8-sig")
+                st.success("専用の過去予定表を読み込みました！")
+            except Exception as e:
+                st.error(f"CSVの読み込みに失敗しました: {e}")
+                schedule_df_for_fix = pd.DataFrame()
+        else:
+            schedule_df_for_fix = load_csv_data(SCHEDULE_FILE)
+
+        official_products = []
+        if not schedule_df_for_fix.empty and '品名' in schedule_df_for_fix.columns:
+            official_products = sorted(schedule_df_for_fix['品名'].dropna().astype(str).unique().tolist())
+            
+        unmatched_products = [p for p in existing_products if p not in official_products]
+        
+        st.divider()
+        st.markdown("##### Step 2: 修正対象の選択と詳細確認")
+        
+        col_from, col_to = st.columns(2)
+        with col_from:
+            st.write("**変更したい（間違っている）品名**")
+            if unmatched_products:
+                source_options = [""] + unmatched_products
+            else:
+                source_options = ["（指定期間内の未照合はありません）"]
+            
+            source_product = st.selectbox("Firebaseに登録されている品名 (未照合のみ)", source_options)
+            
+        with col_to:
+            st.write("**変更後の（正しい）品名**")
+            target_product = st.selectbox("予定表(CSV)の品名", [""] + official_products)
+            manual_target = st.text_input("または、手動で正しい品名を入力", help="プルダウンに無い場合はこちらに入力してください")
+            
+        final_target = manual_target if manual_target else target_product
+        
+        if source_product and not source_product.startswith("（"):
+            st.markdown(f"**🔍 「{source_product}」の作業履歴（推測の手がかり）**")
+            details_df = target_tasks_df[target_tasks_df['製品名'] == source_product].sort_values('作成日時_dt')
+            
+            for _, r in details_df.iterrows():
+                work_date = r['作成日時_dt'].strftime('%Y/%m/%d %H:%M')
+                worker = r.get('入力者名', '不明')
+                process = r.get('工程名', '')
+                detail = r.get('詳細', '')
+                qty = r.get('出来数', 0)
+                st.caption(f"・ {work_date} | 👤 {worker} | 🔧 {process} ({detail}) | 📦 {qty}個")
+
+        st.divider()
+        st.markdown("##### Step 3: 一括書き換えの実行")
+        if st.button("この品名を一括で書き換える", type="primary"):
+            if not source_product or source_product.startswith("（"):
+                st.error("変更元の品名を正しく選択してください。")
+            elif not final_target:
+                st.error("変更先の品名を入力または選択してください。")
+            elif source_product == final_target:
+                st.error("変更元と変更先が同じです。")
+            else:
+                with st.spinner(f"「{source_product}」を「{final_target}」に変更中..."):
+                    try:
+                        target_rows = all_tasks_df[all_tasks_df['製品名'] == source_product]
+                        if target_rows.empty:
+                            st.warning("該当する品名のデータが見つかりませんでした。")
+                        else:
+                            db_batch = firestore.client()
+                            batch = db_batch.batch()
+                            update_count = 0
+                            
+                            for _, row in target_rows.iterrows():
+                                doc_id = row.get('id')
+                                col_name = row.get('_collection')
+                                if col_name and doc_id:
+                                    doc_ref = db_batch.collection(col_name).document(doc_id)
+                                    batch.update(doc_ref, {"製品名": final_target})
+                                    update_count += 1
+                                    
+                            if update_count > 0:
+                                batch.commit()
+                                st.session_state.success_msg = f"✅ {update_count}件の作業記録を「{final_target}」に書き換えました！"
+                                load_from_firestore.clear()
+                                load_tasks_for_customer.clear()
+                                st.rerun()
+                    except Exception as e:
+                        st.error(f"更新中にエラーが発生しました: {e}")
+
     with col1:
         target_date = st.date_input("📅 表示する日付", value=datetime.now(timezone(timedelta(hours=9))).date())
     with col2:
