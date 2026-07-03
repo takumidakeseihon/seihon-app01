@@ -17,6 +17,26 @@ import base64
 import io
 from PIL import Image
 
+# ==========================================
+# ▼▼▼ ページ設定とズーム防止設定（必ず一番上に配置） ▼▼▼
+# ==========================================
+st.set_page_config(page_title="製本記録アプリ", layout="wide")
+
+# スマホの入力欄で勝手にズームされるのを防ぐ設定
+st.markdown(
+    """
+    <style>
+    input, textarea, select {
+        font-size: 16px !important;
+    }
+    </style>
+    """,
+    unsafe_allow_html=True
+)
+# ==========================================
+# ▲▲▲ 設定ここまで ▲▲▲
+# ==========================================
+
 # --- 共通テキストクリーンアップ関数（絶対マッチさせる用） ---
 def clean_text(text):
     if pd.isna(text): return ""
@@ -1026,13 +1046,98 @@ def show_admin_dashboard():
         reports_df = load_from_firestore(db, "daily_reports")
         
         in_prog_df = load_from_firestore(db, "in_progress")
+        if not in_prog_df.empty:
+            in_prog_df['_collection'] = "in_progress"
+            
         comp_df = load_from_firestore(db, "completed", days_limit=3000)
-        all_tasks_df = pd.concat([in_prog_df, comp_df], ignore_index=True)
+        if not comp_df.empty:
+            comp_df['_collection'] = "completed"
+            
+        if not in_prog_df.empty or not comp_df.empty:
+            all_tasks_df = pd.concat([in_prog_df, comp_df], ignore_index=True)
+        else:
+            all_tasks_df = pd.DataFrame()
+            
         today_tasks_df = pd.DataFrame()
         
         if not all_tasks_df.empty and '作成日時' in all_tasks_df.columns:
             all_tasks_df['作成日時_dt'] = pd.to_datetime(all_tasks_df['作成日時'], utc=True).dt.tz_convert('Asia/Tokyo')
             today_tasks_df = all_tasks_df[all_tasks_df['作成日時_dt'].dt.date == target_date]
+
+    # ----------------------------------------------------
+    # ▼▼▼ 過去データの品名一括修正（未照合の紐付け） ▼▼▼
+    # ----------------------------------------------------
+    st.divider()
+    with st.expander("🛠️ 過去データの品名一括修正 (未照合の紐付け)", expanded=False):
+        st.markdown("現場が「仮の名前」で入力した過去の作業記録を、予定表の「正式な名前」に一括で書き換えます。")
+        
+        existing_products = []
+        if not all_tasks_df.empty and '製品名' in all_tasks_df.columns:
+            existing_products = sorted(all_tasks_df['製品名'].dropna().astype(str).unique().tolist())
+            
+        schedule_df = load_csv_data(SCHEDULE_FILE)
+        official_products = []
+        if not schedule_df.empty and '品名' in schedule_df.columns:
+            official_products = sorted(schedule_df['品名'].dropna().astype(str).unique().tolist())
+            
+        unmatched_products = [p for p in existing_products if p not in official_products]
+        
+        col_from, col_to = st.columns(2)
+        with col_from:
+            st.write("**変更したい（間違っている）品名**")
+            source_options = [""]
+            if unmatched_products:
+                source_options.extend(["--- ▼ 予定表にない品名 (未照合) ▼ ---"])
+                source_options.extend(unmatched_products)
+            source_options.extend(["--- ▼ 照合済みの品名 ▼ ---"])
+            source_options.extend([p for p in existing_products if p in official_products])
+            
+            source_product = st.selectbox("Firebaseに登録されている品名", source_options)
+            
+        with col_to:
+            st.write("**変更後の（正しい）品名**")
+            target_product = st.selectbox("予定表(schedule.csv)の品名", [""] + official_products)
+            manual_target = st.text_input("または、手動で正しい品名を入力")
+            
+        final_target = manual_target if manual_target else target_product
+        
+        if st.button("この品名を一括で書き換える", type="primary"):
+            if not source_product or source_product.startswith("---"):
+                st.error("変更元の品名を正しく選択してください。")
+            elif not final_target:
+                st.error("変更先の品名を入力または選択してください。")
+            elif source_product == final_target:
+                st.error("変更元と変更先が同じです。")
+            else:
+                with st.spinner(f"「{source_product}」を「{final_target}」に変更中..."):
+                    try:
+                        target_rows = all_tasks_df[all_tasks_df['製品名'] == source_product]
+                        if target_rows.empty:
+                            st.warning("該当する品名のデータが見つかりませんでした。")
+                        else:
+                            db_batch = firestore.client()
+                            batch = db_batch.batch()
+                            update_count = 0
+                            
+                            for _, row in target_rows.iterrows():
+                                doc_id = row.get('id')
+                                col_name = row.get('_collection')
+                                if col_name and doc_id:
+                                    doc_ref = db_batch.collection(col_name).document(doc_id)
+                                    batch.update(doc_ref, {"製品名": final_target})
+                                    update_count += 1
+                                    
+                            if update_count > 0:
+                                batch.commit()
+                                st.session_state.success_msg = f"✅ {update_count}件の作業記録を「{final_target}」に書き換えました！"
+                                load_from_firestore.clear()
+                                load_tasks_for_customer.clear()
+                                st.rerun()
+                    except Exception as e:
+                        st.error(f"更新中にエラーが発生しました: {e}")
+    # ----------------------------------------------------
+    # ▲▲▲ 過去データの品名一括修正 ここまで ▲▲▲
+    # ----------------------------------------------------
         
     if location_filter == "旭川":
         target_members = ASAHIKAWA_MEMBERS
@@ -1533,21 +1638,21 @@ def main_app():
                                         st.session_state.scroll_to_top = True
                                         st.rerun()
                                         
-                                with st.expander("🗑️ 削除"):
-                                    st.markdown("本当にこの工程を削除しますか？")
-                                    if st.button("はい、削除します", key=f"delete_confirm_{row['id']}", type="primary", use_container_width=True):
-                                        try:
-                                            if not firebase_admin._apps:
-                                                init_firebase()
-                                            db_del = firestore.client()
-                                            db_del.collection("in_progress").document(row['id']).delete()
-                                            load_from_firestore.clear()
-                                            st.success(f"作業記録 (ID: {row['id']}) を削除しました。")
-                                            st.rerun()
-                                        except Exception as e:
-                                            st.error(f"削除中にエラーが発生しました: {e}")
-                                st.divider()
-                                
+                            with st.expander("🗑️ 削除"):
+                                st.markdown("本当にこの工程を削除しますか？")
+                                if st.button("はい、削除します", key=f"delete_confirm_{row['id']}", type="primary", use_container_width=True):
+                                    try:
+                                        if not firebase_admin._apps:
+                                            init_firebase()
+                                        db_del = firestore.client()
+                                        db_del.collection("in_progress").document(row['id']).delete()
+                                        load_from_firestore.clear()
+                                        st.success(f"作業記録 (ID: {row['id']}) を削除しました。")
+                                        st.rerun()
+                                    except Exception as e:
+                                        st.error(f"削除中にエラーが発生しました: {e}")
+                            st.divider()
+                            
         elif st.session_state.sub_view == 'INPUT_FORM':
             if 'record_to_copy' in st.session_state:
                 process_form(is_edit_mode=False, default_data=st.session_state.record_to_copy)
@@ -1698,7 +1803,7 @@ def main_app():
                                         st.session_state.success_msg = f"「{company_name}」を削除しました。"
                                         st.rerun()
 
-                            st.divider()
+                    st.divider()
 
                     st.write("**2. 登録する工程内容**")
                     process_name = st.selectbox("工程名", NAIRE_PROCESS_OPTIONS, key="bulk_process_name")
@@ -1810,8 +1915,6 @@ def main_app():
     elif main_view == "👑 管理者画面":
         show_admin_dashboard()
 
-st.set_page_config(layout="wide")
-
 # ▼▼▼ スマホのキーボードがセレクトボックスで勝手に出るのを防ぐ裏技 ▼▼▼
 components.html(
     """
@@ -1832,7 +1935,6 @@ components.html(
     """,
     height=0, width=0
 )
-# ▲▲▲ 追加ここまで ▲▲▲
 
 st.markdown("<h1 style='font-size: clamp(1.2rem, 5vw, 2.5rem); padding-top: 1rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;'>📘 製本記録アプリ</h1>", unsafe_allow_html=True)
 
@@ -1849,7 +1951,6 @@ if st.session_state.get('scroll_to_top', False):
         height=0
     )
     st.session_state.scroll_to_top = False
-# ▲▲▲ 追加ここまで ▲▲▲
 
 if 'submit_disabled' not in st.session_state:
     st.session_state.submit_disabled = False
