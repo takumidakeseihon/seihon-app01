@@ -1071,12 +1071,16 @@ def show_admin_dashboard():
     with st.expander("🛠️ 過去データの品名一括修正 (未照合の紐付け)", expanded=False):
         st.markdown("現場が「仮の名前」で入力した過去の作業記録を、予定表の「正式な名前」に一括で書き換えます。")
         
+        st.markdown("##### Step 1: 検索条件と予定表データの設定")
         col_date1, col_date2 = st.columns(2)
         with col_date1:
             fix_start_date = st.date_input("検索開始日", value=datetime.now(timezone(timedelta(hours=9))).date() - timedelta(days=7), key="fix_start")
         with col_date2:
             fix_end_date = st.date_input("検索終了日", value=datetime.now(timezone(timedelta(hours=9))).date(), key="fix_end")
             
+        st.info("💡 過去の品名に紐付ける場合は、当時の予定表(CSV)をここにアップロードしてください。現場の入力画面には影響しません。")
+        uploaded_past_csv = st.file_uploader("過去の予定表 (schedule.csv) ※任意", type=['csv'], key="past_schedule_upload")
+        
         target_tasks_df = pd.DataFrame()
         if not all_tasks_df.empty and '作成日時_dt' in all_tasks_df.columns:
             mask = (all_tasks_df['作成日時_dt'].dt.date >= fix_start_date) & (all_tasks_df['作成日時_dt'].dt.date <= fix_end_date)
@@ -1086,12 +1090,25 @@ def show_admin_dashboard():
         if not target_tasks_df.empty and '製品名' in target_tasks_df.columns:
             existing_products = sorted(target_tasks_df['製品名'].dropna().astype(str).unique().tolist())
             
-        schedule_df = load_csv_data(SCHEDULE_FILE)
+        # 修正専用のスケジュールデータ読み込み（現場画面とは切り離し）
+        if uploaded_past_csv is not None:
+            try:
+                schedule_df_for_fix = pd.read_csv(uploaded_past_csv, encoding="utf-8-sig")
+                st.success("専用の過去予定表を読み込みました！")
+            except Exception as e:
+                st.error(f"CSVの読み込みに失敗しました: {e}")
+                schedule_df_for_fix = pd.DataFrame()
+        else:
+            schedule_df_for_fix = load_csv_data(SCHEDULE_FILE)
+
         official_products = []
-        if not schedule_df.empty and '品名' in schedule_df.columns:
-            official_products = sorted(schedule_df['品名'].dropna().astype(str).unique().tolist())
+        if not schedule_df_for_fix.empty and '品名' in schedule_df_for_fix.columns:
+            official_products = sorted(schedule_df_for_fix['品名'].dropna().astype(str).unique().tolist())
             
         unmatched_products = [p for p in existing_products if p not in official_products]
+        
+        st.divider()
+        st.markdown("##### Step 2: 修正対象の選択と詳細確認")
         
         col_from, col_to = st.columns(2)
         with col_from:
@@ -1105,11 +1122,26 @@ def show_admin_dashboard():
             
         with col_to:
             st.write("**変更後の（正しい）品名**")
-            target_product = st.selectbox("予定表(schedule.csv)の品名", [""] + official_products)
-            manual_target = st.text_input("または、手動で正しい品名を入力")
+            target_product = st.selectbox("予定表(CSV)の品名", [""] + official_products)
+            manual_target = st.text_input("または、手動で正しい品名を入力", help="プルダウンに無い場合はこちらに入力してください")
             
         final_target = manual_target if manual_target else target_product
         
+        # 選択された未照合品名の詳細（推測の手がかり）を表示
+        if source_product and not source_product.startswith("（"):
+            st.markdown(f"**🔍 「{source_product}」の作業履歴（推測の手がかり）**")
+            details_df = target_tasks_df[target_tasks_df['製品名'] == source_product].sort_values('作成日時_dt')
+            
+            for _, r in details_df.iterrows():
+                work_date = r['作成日時_dt'].strftime('%Y/%m/%d %H:%M')
+                worker = r.get('入力者名', '不明')
+                process = r.get('工程名', '')
+                detail = r.get('詳細', '')
+                qty = r.get('出来数', 0)
+                st.caption(f"・ {work_date} | 👤 {worker} | 🔧 {process} ({detail}) | 📦 {qty}個")
+
+        st.divider()
+        st.markdown("##### Step 3: 一括書き換えの実行")
         if st.button("この品名を一括で書き換える", type="primary"):
             if not source_product or source_product.startswith("（"):
                 st.error("変更元の品名を正しく選択してください。")
