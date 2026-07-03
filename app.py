@@ -1071,9 +1071,20 @@ def show_admin_dashboard():
     with st.expander("🛠️ 過去データの品名一括修正 (未照合の紐付け)", expanded=False):
         st.markdown("現場が「仮の名前」で入力した過去の作業記録を、予定表の「正式な名前」に一括で書き換えます。")
         
+        col_date1, col_date2 = st.columns(2)
+        with col_date1:
+            fix_start_date = st.date_input("検索開始日", value=datetime.now(timezone(timedelta(hours=9))).date() - timedelta(days=7), key="fix_start")
+        with col_date2:
+            fix_end_date = st.date_input("検索終了日", value=datetime.now(timezone(timedelta(hours=9))).date(), key="fix_end")
+            
+        target_tasks_df = pd.DataFrame()
+        if not all_tasks_df.empty and '作成日時_dt' in all_tasks_df.columns:
+            mask = (all_tasks_df['作成日時_dt'].dt.date >= fix_start_date) & (all_tasks_df['作成日時_dt'].dt.date <= fix_end_date)
+            target_tasks_df = all_tasks_df[mask].copy()
+
         existing_products = []
-        if not all_tasks_df.empty and '製品名' in all_tasks_df.columns:
-            existing_products = sorted(all_tasks_df['製品名'].dropna().astype(str).unique().tolist())
+        if not target_tasks_df.empty and '製品名' in target_tasks_df.columns:
+            existing_products = sorted(target_tasks_df['製品名'].dropna().astype(str).unique().tolist())
             
         schedule_df = load_csv_data(SCHEDULE_FILE)
         official_products = []
@@ -1085,14 +1096,12 @@ def show_admin_dashboard():
         col_from, col_to = st.columns(2)
         with col_from:
             st.write("**変更したい（間違っている）品名**")
-            source_options = [""]
             if unmatched_products:
-                source_options.extend(["--- ▼ 予定表にない品名 (未照合) ▼ ---"])
-                source_options.extend(unmatched_products)
-            source_options.extend(["--- ▼ 照合済みの品名 ▼ ---"])
-            source_options.extend([p for p in existing_products if p in official_products])
+                source_options = [""] + unmatched_products
+            else:
+                source_options = ["（指定期間内の未照合はありません）"]
             
-            source_product = st.selectbox("Firebaseに登録されている品名", source_options)
+            source_product = st.selectbox("Firebaseに登録されている品名 (未照合のみ)", source_options)
             
         with col_to:
             st.write("**変更後の（正しい）品名**")
@@ -1102,7 +1111,7 @@ def show_admin_dashboard():
         final_target = manual_target if manual_target else target_product
         
         if st.button("この品名を一括で書き換える", type="primary"):
-            if not source_product or source_product.startswith("---"):
+            if not source_product or source_product.startswith("（"):
                 st.error("変更元の品名を正しく選択してください。")
             elif not final_target:
                 st.error("変更先の品名を入力または選択してください。")
