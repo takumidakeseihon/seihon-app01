@@ -1051,18 +1051,16 @@ def show_admin_dashboard():
         reports_df = load_from_firestore(db, "daily_reports")
         
         in_prog_df = load_from_firestore(db, "in_progress")
+        comp_df = load_from_firestore(db, "completed", days_limit=3000)
+        
         if not in_prog_df.empty:
             in_prog_df['_collection'] = "in_progress"
-            
-        comp_df = load_from_firestore(db, "completed", days_limit=3000)
         if not comp_df.empty:
             comp_df['_collection'] = "completed"
             
-        if not in_prog_df.empty or not comp_df.empty:
-            all_tasks_df = pd.concat([in_prog_df, comp_df], ignore_index=True)
-        else:
-            all_tasks_df = pd.DataFrame()
-
+        all_tasks_df = pd.concat([in_prog_df, comp_df], ignore_index=True) if not in_prog_df.empty or not comp_df.empty else pd.DataFrame()
+        today_tasks_df = pd.DataFrame()
+        
         if not all_tasks_df.empty and '作成日時' in all_tasks_df.columns:
             all_tasks_df['作成日時_dt'] = pd.to_datetime(all_tasks_df['作成日時'], utc=True).dt.tz_convert('Asia/Tokyo')
 
@@ -1087,7 +1085,6 @@ def show_admin_dashboard():
                 load_tasks_for_customer.clear()
                 st.rerun()
                 
-        today_tasks_df = pd.DataFrame()
         if not all_tasks_df.empty and '作成日時_dt' in all_tasks_df.columns:
             today_tasks_df = all_tasks_df[all_tasks_df['作成日時_dt'].dt.date == target_date]
             
