@@ -998,10 +998,7 @@ def show_admin_dashboard():
     st.markdown("<h2 style='font-size: clamp(1.2rem, 5vw, 2rem); margin-bottom: 1rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;' title='👑 管理者ダッシュボード'>👑 管理者ダッシュボード</h2>", unsafe_allow_html=True)
     
     current_user = st.session_state.get('logged_in_user', '')
-    
-    # 管理者判定（全角・半角スペースの揺れを吸収）
-    clean_user = current_user.replace(" ", "").replace("　", "")
-    is_admin = clean_user in ["岳匠", "福田準也"]
+    is_admin = current_user in ["岳　匠", "福田 準也"]
     
     if not st.session_state.get('admin_authenticated', False) and not is_admin:
         st.info("この画面は日報を確認する管理者専用の画面です。パスワードを入力してください。")
@@ -1046,16 +1043,10 @@ def show_admin_dashboard():
         if not all_tasks_df.empty and '作成日時' in all_tasks_df.columns:
             all_tasks_df['作成日時_dt'] = pd.to_datetime(all_tasks_df['作成日時'], utc=True).dt.tz_convert('Asia/Tokyo')
 
-    # ★ここで画面を切り替えます（タブだと再読み込みで戻ってしまうため、ラジオボタンで状態を保持）
-    admin_view = st.radio(
-        "機能を選択",
-        ["📊 日報・作業記録の確認", "🛠️ 未照合データの一括修正"],
-        horizontal=True,
-        key="admin_view_selector",
-        label_visibility="collapsed"
-    )
+    # ★ここで画面を「タブ」で2つに分けます！
+    tab_report, tab_fix = st.tabs(["📊 日報・作業記録の確認", "🛠️ 未照合データの一括修正"])
     
-    if admin_view == "📊 日報・作業記録の確認":
+    with tab_report:
         col1, col2, col3 = st.columns([1.5, 2, 1.5])
         with col1:
             target_date = st.date_input("📅 表示する日付", value=datetime.now(timezone(timedelta(hours=9))).date())
@@ -1232,7 +1223,7 @@ def show_admin_dashboard():
                     if photo and isinstance(photo, str) and photo.startswith('data:image'):
                         st.image(photo, caption=f"{worker}さんからの添付写真", use_container_width=True)
 
-    elif admin_view == "🛠️ 未照合データの一括修正":
+    with tab_fix:
         st.markdown("現場が「仮の名前」で入力した過去の作業記録を、予定表の「正式な名前」に一括で書き換えます。")
         
         st.markdown("##### Step 1: 検索条件と予定表データの設定")
