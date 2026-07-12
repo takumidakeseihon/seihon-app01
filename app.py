@@ -33,6 +33,27 @@ st.markdown(
     """,
     unsafe_allow_html=True
 )
+
+# ▼▼▼ スマホのキーボードがセレクトボックスで勝手に出るのを防ぐ裏技 ▼▼▼
+components.html(
+    """
+    <script>
+        const doc = window.parent.document;
+        function disableSelectKeyboard() {
+            const inputs = doc.querySelectorAll('div[data-baseweb="select"] input');
+            inputs.forEach(input => {
+                if (input.getAttribute('inputmode') !== 'none') {
+                    input.setAttribute('inputmode', 'none');
+                }
+            });
+        }
+        disableSelectKeyboard();
+        const observer = new MutationObserver(disableSelectKeyboard);
+        observer.observe(doc.body, { childList: true, subtree: true });
+    </script>
+    """,
+    height=0, width=0
+)
 # ==========================================
 # ▲▲▲ 設定ここまで ▲▲▲
 # ==========================================
@@ -1459,7 +1480,8 @@ def main_app():
         for key in list(st.session_state.keys()):
             if key not in ['_sidebar_state', 'query_params']:
                 del st.session_state[key]
-        st.query_params.clear()
+        if hasattr(st, "query_params"):
+            st.query_params.clear()
         load_from_firestore.clear()
         load_tasks_for_customer.clear()
         st.rerun()
@@ -1584,7 +1606,9 @@ def main_app():
                 unassigned_mask = display_df['拠点'].isin(['', '未設定', None]) | display_df['拠点'].isna()
                 if unassigned_mask.any():
                     display_df['clean_製品名'] = display_df['製品名'].astype(str).str.strip()
-                    display_df.loc[unassigned_mask, '拠点'] = display_df.loc[unassigned_mask, '入力者名'].map(WORKER_TO_LOCATION)
+                    # ★ 防御機能追加: もし「入力者名」が記録されていない古いデータがあってもエラーで落ちないように保護します
+                    if '入力者名' in display_df.columns:
+                        display_df.loc[unassigned_mask, '拠点'] = display_df.loc[unassigned_mask, '入力者名'].map(WORKER_TO_LOCATION)
                 
                 display_df['拠点'].fillna('未設定', inplace=True)
                 display_df.drop(columns=['clean_製品名'], inplace=True, errors='ignore')
@@ -1950,30 +1974,112 @@ def main_app():
     elif main_view == "👑 管理者画面":
         show_admin_dashboard()
 
-# ▼▼▼ スマホのキーボードがセレクトボックスで勝手に出るのを防ぐ裏技 ▼▼▼
-components.html(
-    """
-    <script>
-        const doc = window.parent.document;
-        function disableSelectKeyboard() {
-            const inputs = doc.querySelectorAll('div[data-baseweb="select"] input');
-            inputs.forEach(input => {
-                if (input.getAttribute('inputmode') !== 'none') {
-                    input.setAttribute('inputmode', 'none');
-                }
-            });
-        }
-        disableSelectKeyboard();
-        const observer = new MutationObserver(disableSelectKeyboard);
-        observer.observe(doc.body, { childList: true, subtree: true });
-    </script>
-    """,
-    height=0, width=0
+# --- Step1のフラグメント化（ロードのチラつき防止） ---
+@st.fragment
+def render_step1_fragment(schedule_df, display_df, selected_location, product_to_location):
+    st.markdown(f"<h3 style='font-size: clamp(0.9rem, 3.5vw, 1.4rem); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;'>Step 1: 新規工程を記録（{selected_location}）</h3>", unsafe_allow_html=True)
+    
+    filtered_schedule_df = schedule_df.copy()
+    if selected_location != "すべて":
+        if not filtered_schedule_df.empty and '拠点' in filtered_schedule_df.columns:
+            filtered_schedule_df = filtered_schedule_df[filtered_schedule_df['拠点'] == selected_location]
+    
+    customer_names = []
+    if not filtered_schedule_df.empty and '得意先名' in filtered_schedule_df.columns:
+        customer_names = sorted(filtered_schedule_df['得意先名'].dropna().unique().tolist())
+    
+    selected_customer = st.selectbox("得意先名で絞り込み", ["すべての得意先"] + customer_names, key="customer_choice")
+    
+    with st.form(key="selection_form"):
+        product_list_df = filtered_schedule_df.copy()
+        if selected_customer != "すべての得意先":
+            product_list_df = product_list_df[product_list_df['得意先名'] == selected_customer]
+
+        schedule_products = []
+        if not product_list_df.empty and '品名' in product_list_df.columns:
+            schedule_products = product_list_df['品名'].dropna().unique().tolist()
+            
+        in_progress_products_in_location = []
+        if not display_df.empty:
+            if '得意先名' not in display_df.columns and '品名' in schedule_df.columns and '得意先名' in schedule_df.columns:
+                product_to_customer_map = schedule_df.drop_duplicates(subset=['品名']).set_index('品名')['得意先名'].to_dict()
+                display_df['得意先名'] = display_df['製品名'].map(product_to_customer_map)
+
+            if selected_customer != "すべての得意先":
+                if '得意先名' in display_df.columns:
+                    in_progress_products_in_location = display_df[display_df['得意先名'] == selected_customer]['製品名'].unique().tolist()
+            else:
+                in_progress_products_in_location = display_df['製品名'].unique().tolist()
+        
+        product_list = sorted(list(set(schedule_products + in_progress_products_in_location)))
+        
+        options = [""] + product_list
+        
+        default_product_index = 0
+        if 'product_choice_final' in st.session_state and st.session_state.product_choice_final in options:
+            default_product_index = options.index(st.session_state.product_choice_final)
+
+        selected_product = st.selectbox("製品を選択（リスト内で検索もできます）", options, index=default_product_index)
+        
+        if selected_product and selected_product != "" and not schedule_df.empty and '品名' in schedule_df.columns:
+            clean_selected = clean_text(selected_product)
+            if 'clean_品名_for_match' not in schedule_df.columns:
+                schedule_df['clean_品名_for_match'] = schedule_df['品名'].apply(clean_text)
+                
+            preview_row = schedule_df[schedule_df['clean_品名_for_match'] == clean_selected]
+            if not preview_row.empty:
+                p_info = preview_row.iloc[0]
+                p_qty = p_info.get(SCHEDULE_COL_TOTAL_QUANTITY, "ー")
+                p_detail = p_info.get(SCHEDULE_COL_DETAILS, "ー")
+                p_due = p_info.get(SCHEDULE_COL_DUE_DATE, "ー")
+                
+                remarks_list = [str(p_info[col]) for col in SCHEDULE_COL_REMARKS if col in p_info and pd.notna(p_info[col])]
+                p_memo = " | ".join(remarks_list)
+                
+                preview_text = f"📦 **総数:** {p_qty}　📅 **納期:** {p_due}　📝 **適用:** {p_detail}"
+                if p_memo:
+                    preview_text += f"\n💡 **備考:** {p_memo}"
+                
+                st.info(preview_text)
+
+        allow_manual_input = st.checkbox("リストにない製品を手入力する")
+        product_name_manual = st.text_input("新しい製品名を入力")
+        process_name = st.selectbox("記録する工程名", PROCESS_OPTIONS)
+        
+        submitted = st.form_submit_button("この工程の入力を開始する", type="primary")
+
+        if submitted:
+            product_name = product_name_manual if allow_manual_input and product_name_manual else selected_product
+            if not product_name or not process_name:
+                st.error("製品名と工程名を両方選択してください。")
+            else:
+                if 'default_page_count' in st.session_state: del st.session_state.default_page_count
+                if 'schedule_info_display' in st.session_state: del st.session_state.schedule_info_display
+                if 'auto_selected_location' in st.session_state: del st.session_state.auto_selected_location
+
+                if not schedule_df.empty and '品名' in schedule_df.columns:
+                    clean_target = clean_text(product_name)
+                    if 'clean_品名_for_match' not in schedule_df.columns:
+                        schedule_df['clean_品名_for_match'] = schedule_df['品名'].apply(clean_text)
+                    product_row = schedule_df[schedule_df['clean_品名_for_match'] == clean_target]
+                    
+                    if not product_row.empty:
+                        info = product_row.iloc[0]
+                        st.session_state.auto_selected_location = product_to_location.get(clean_target, "未設定")
+                        if process_name in ["中綴じ", "無線綴じ", "糸かがり", "綴じ（カレンダー）"] and SCHEDULE_COL_PAGE_COUNT in schedule_df.columns:
+                            page_count_val = pd.to_numeric(info.get(SCHEDULE_COL_PAGE_COUNT), errors='coerce')
+                            st.session_state.default_page_count = int(page_count_val) if pd.notna(page_count_val) else 0
+                    
+                st.session_state.selected_product = product_name
+                st.session_state.selected_process = process_name
+                st.session_state.sub_view = 'INPUT_FORM'
+                st.rerun()
+
+st.markdown(
+    "<h1 style='font-size: clamp(1.2rem, 5vw, 2.5rem); padding-top: 1rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;'>📘 製本記録アプリ</h1>", 
+    unsafe_allow_html=True
 )
 
-st.markdown("<h1 style='font-size: clamp(1.2rem, 5vw, 2.5rem); padding-top: 1rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;'>📘 製本記録アプリ</h1>", unsafe_allow_html=True)
-
-# ▼▼▼ 画面トップへの自動スクロール用スクリプト ▼▼▼
 if st.session_state.get('scroll_to_top', False):
     components.html(
         """
@@ -2000,7 +2106,8 @@ db = init_firebase()
 if not db:
     st.stop()
 
-params = st.query_params.to_dict()
+# ★エラー対策: st.query_params の操作を安全な方法に変更
+params = st.query_params.to_dict() if hasattr(st, 'query_params') else {}
 url_uid = params.get("uid")
 
 if 'logged_in_user' not in st.session_state:
@@ -2011,10 +2118,12 @@ if 'logged_in_user' not in st.session_state:
 
 if 'logged_in_user' in st.session_state:
     if st.session_state.get("just_logged_in"):
-        st.query_params.uid = WORKER_ID_MAP.get(st.session_state.logged_in_user, "")
+        if hasattr(st, 'query_params'):
+            st.query_params["uid"] = WORKER_ID_MAP.get(st.session_state.logged_in_user, "")
         show_bookmark_page(st.session_state.logged_in_user)
     else:
-        st.query_params.uid = WORKER_ID_MAP.get(st.session_state.logged_in_user, "")
+        if hasattr(st, 'query_params'):
+            st.query_params["uid"] = WORKER_ID_MAP.get(st.session_state.logged_in_user, "")
         main_app()
 else:
     login_screen()
