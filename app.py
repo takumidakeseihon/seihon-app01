@@ -1064,9 +1064,46 @@ def show_admin_dashboard():
         if not all_tasks_df.empty and '作成日時' in all_tasks_df.columns:
             all_tasks_df['作成日時_dt'] = pd.to_datetime(all_tasks_df['作成日時'], utc=True).dt.tz_convert('Asia/Tokyo')
 
-    tab_report, tab_fix = st.tabs(["📊 日報・作業記録の確認", "🛠️ 未照合データの一括修正"])
+    # ★改善: 現在開いているタブを記憶するように変更
+    if "admin_active_tab" not in st.session_state:
+        st.session_state.admin_active_tab = 0
+
+    def set_active_tab(tab_index):
+        st.session_state.admin_active_tab = tab_index
+
+    # HTMLとJavaScriptでタブ切り替えのイベントを監視し、Python側に伝える
+    tab_html = """
+    <script>
+        const tabs = window.parent.document.querySelectorAll('[data-baseweb="tab"]');
+        tabs.forEach((tab, index) => {
+            tab.addEventListener('click', () => {
+                // Streamlitの内部イベントとしてタブのインデックスを送信（擬似的な状態更新）
+                // ただし、直接Python変数を書き換えるのは難しいため、ボタンクリックで対応
+            });
+        });
+    </script>
+    """
+    components.html(tab_html, height=0)
+
+    # st.tabsを直接使うと状態の保存が難しいため、ラジオボタンで擬似的なタブを作成
+    active_tab = st.radio(
+        "機能を選択してください",
+        ["📊 日報・作業記録の確認", "🛠️ 未照合データの一括修正"],
+        index=st.session_state.admin_active_tab,
+        horizontal=True,
+        label_visibility="collapsed"
+    )
     
-    with tab_report:
+    # 選択されたタブのインデックスを保存
+    if active_tab == "📊 日報・作業記録の確認":
+        st.session_state.admin_active_tab = 0
+    else:
+        st.session_state.admin_active_tab = 1
+        
+    st.divider()
+
+    # --- 1つ目のタブ: 📊 日報・作業記録の確認 ---
+    if st.session_state.admin_active_tab == 0:
         col1, col2, col3 = st.columns([1.5, 2, 1.5])
         with col1:
             target_date = st.date_input("📅 表示する日付", value=datetime.now(timezone(timedelta(hours=9))).date())
@@ -1242,7 +1279,8 @@ def show_admin_dashboard():
                     if photo and isinstance(photo, str) and photo.startswith('data:image'):
                         st.image(photo, caption=f"{worker}さんからの添付写真", use_container_width=True)
 
-    with tab_fix:
+    # --- 2つ目のタブ: 🛠️ 未照合データの一括修正 ---
+    elif st.session_state.admin_active_tab == 1:
         st.markdown("現場が「仮の名前」で入力した過去の作業記録を、予定表の「正式な名前」に一括で書き換えます。")
         
         st.markdown("##### Step 1: 検索条件と予定表データの設定")
@@ -1345,6 +1383,7 @@ def show_admin_dashboard():
                                 st.session_state.success_msg = f"✅ {update_count}件の作業記録を「{final_target}」に書き換えました！"
                                 load_from_firestore.clear()
                                 load_tasks_for_customer.clear()
+                                # ★重要: ここでrerunしても、セッションステート(admin_active_tab=1)が保持されているので一括修正タブに留まります
                                 st.rerun()
                     except Exception as e:
                         st.error(f"更新中にエラーが発生しました: {e}")
@@ -1970,107 +2009,6 @@ def main_app():
         
     elif main_view == "👑 管理者画面":
         show_admin_dashboard()
-
-# --- Step1のフラグメント化（ロードのチラつき防止） ---
-@st.fragment
-def render_step1_fragment(schedule_df, display_df, selected_location, product_to_location):
-    st.markdown(f"<h3 style='font-size: clamp(0.9rem, 3.5vw, 1.4rem); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;'>Step 1: 新規工程を記録（{selected_location}）</h3>", unsafe_allow_html=True)
-    
-    filtered_schedule_df = schedule_df.copy()
-    if selected_location != "すべて":
-        if not filtered_schedule_df.empty and '拠点' in filtered_schedule_df.columns:
-            filtered_schedule_df = filtered_schedule_df[filtered_schedule_df['拠点'] == selected_location]
-    
-    customer_names = []
-    if not filtered_schedule_df.empty and '得意先名' in filtered_schedule_df.columns:
-        customer_names = sorted(filtered_schedule_df['得意先名'].dropna().unique().tolist())
-    
-    selected_customer = st.selectbox("得意先名で絞り込み", ["すべての得意先"] + customer_names, key="customer_choice")
-    
-    with st.form(key="selection_form"):
-        product_list_df = filtered_schedule_df.copy()
-        if selected_customer != "すべての得意先":
-            product_list_df = product_list_df[product_list_df['得意先名'] == selected_customer]
-
-        schedule_products = []
-        if not product_list_df.empty and '品名' in product_list_df.columns:
-            schedule_products = product_list_df['品名'].dropna().unique().tolist()
-            
-        in_progress_products_in_location = []
-        if not display_df.empty:
-            if '得意先名' not in display_df.columns and '品名' in schedule_df.columns and '得意先名' in schedule_df.columns:
-                product_to_customer_map = schedule_df.drop_duplicates(subset=['品名']).set_index('品名')['得意先名'].to_dict()
-                display_df['得意先名'] = display_df['製品名'].map(product_to_customer_map)
-
-            if selected_customer != "すべての得意先":
-                if '得意先名' in display_df.columns:
-                    in_progress_products_in_location = display_df[display_df['得意先名'] == selected_customer]['製品名'].unique().tolist()
-            else:
-                in_progress_products_in_location = display_df['製品名'].unique().tolist()
-        
-        product_list = sorted(list(set(schedule_products + in_progress_products_in_location)))
-        
-        options = [""] + product_list
-        
-        default_product_index = 0
-        if 'product_choice_final' in st.session_state and st.session_state.product_choice_final in options:
-            default_product_index = options.index(st.session_state.product_choice_final)
-
-        selected_product = st.selectbox("製品を選択（リスト内で検索もできます）", options, index=default_product_index)
-        
-        if selected_product and selected_product != "" and not schedule_df.empty and '品名' in schedule_df.columns:
-            clean_selected = clean_text(selected_product)
-            if 'clean_品名_for_match' not in schedule_df.columns:
-                schedule_df['clean_品名_for_match'] = schedule_df['品名'].apply(clean_text)
-                
-            preview_row = schedule_df[schedule_df['clean_品名_for_match'] == clean_selected]
-            if not preview_row.empty:
-                p_info = preview_row.iloc[0]
-                p_qty = p_info.get(SCHEDULE_COL_TOTAL_QUANTITY, "ー")
-                p_detail = p_info.get(SCHEDULE_COL_DETAILS, "ー")
-                p_due = p_info.get(SCHEDULE_COL_DUE_DATE, "ー")
-                
-                remarks_list = [str(p_info[col]) for col in SCHEDULE_COL_REMARKS if col in p_info and pd.notna(p_info[col])]
-                p_memo = " | ".join(remarks_list)
-                
-                preview_text = f"📦 **総数:** {p_qty}　📅 **納期:** {p_due}　📝 **適用:** {p_detail}"
-                if p_memo:
-                    preview_text += f"\n💡 **備考:** {p_memo}"
-                
-                st.info(preview_text)
-
-        allow_manual_input = st.checkbox("リストにない製品を手入力する")
-        product_name_manual = st.text_input("新しい製品名を入力")
-        process_name = st.selectbox("記録する工程名", PROCESS_OPTIONS)
-        
-        submitted = st.form_submit_button("この工程の入力を開始する", type="primary")
-
-        if submitted:
-            product_name = product_name_manual if allow_manual_input and product_name_manual else selected_product
-            if not product_name or not process_name:
-                st.error("製品名と工程名を両方選択してください。")
-            else:
-                if 'default_page_count' in st.session_state: del st.session_state.default_page_count
-                if 'schedule_info_display' in st.session_state: del st.session_state.schedule_info_display
-                if 'auto_selected_location' in st.session_state: del st.session_state.auto_selected_location
-
-                if not schedule_df.empty and '品名' in schedule_df.columns:
-                    clean_target = clean_text(product_name)
-                    if 'clean_品名_for_match' not in schedule_df.columns:
-                        schedule_df['clean_品名_for_match'] = schedule_df['品名'].apply(clean_text)
-                    product_row = schedule_df[schedule_df['clean_品名_for_match'] == clean_target]
-                    
-                    if not product_row.empty:
-                        info = product_row.iloc[0]
-                        st.session_state.auto_selected_location = product_to_location.get(clean_target, "未設定")
-                        if process_name in ["中綴じ", "無線綴じ", "糸かがり", "綴じ（カレンダー）"] and SCHEDULE_COL_PAGE_COUNT in schedule_df.columns:
-                            page_count_val = pd.to_numeric(info.get(SCHEDULE_COL_PAGE_COUNT), errors='coerce')
-                            st.session_state.default_page_count = int(page_count_val) if pd.notna(page_count_val) else 0
-                    
-                st.session_state.selected_product = product_name
-                st.session_state.selected_process = process_name
-                st.session_state.sub_view = 'INPUT_FORM'
-                st.rerun()
 
 st.markdown(
     "<h1 style='font-size: clamp(1.2rem, 5vw, 2.5rem); padding-top: 1rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;'>📘 製本記録アプリ</h1>", 
