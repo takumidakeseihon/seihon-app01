@@ -1115,6 +1115,18 @@ def show_admin_dashboard():
             st.rerun()
         
     st.divider()
+    
+    with st.spinner("データベースから日報と作業記録を取得中..."):
+        reports_df = load_from_firestore(db, "daily_reports")
+        
+        in_prog_df = load_from_firestore(db, "in_progress")
+        if not in_prog_df.empty:
+            in_prog_df['_collection'] = "in_progress"
+            
+        comp_df = load_from_firestore(db, "completed", days_limit=3000)
+        if not comp_df.empty:
+            comp_df['_collection'] = "completed"
+            
         if not in_prog_df.empty or not comp_df.empty:
             all_tasks_df = pd.concat([in_prog_df, comp_df], ignore_index=True)
         else:
