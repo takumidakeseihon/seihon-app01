@@ -1093,16 +1093,22 @@ def show_daily_report():
             except Exception as e:
                 st.error(f"日報の送信に失敗しました: {e}")
 
-    # ▼▼▼ 新機能：通信量を節約した過去履歴の表示 ▼▼▼
+    # ▼▼▼ 新機能：通信量を極限まで節約した過去履歴の表示 ▼▼▼
     st.divider()
     with st.expander("📂 過去の日報履歴を見る（直近30件）", expanded=False):
-        with st.spinner("通信量を節約しながらあなたの履歴だけを取得中..."):
-            history_df = load_user_report_history(user, limit_count=30)
+        # カレンダー色付けのためにすでに上で読み込んでいるデータ(reports_df)を使い回す（通信量ゼロ！）
+        if reports_df.empty or '提出者' not in reports_df.columns:
+            st.info("過去の日報履歴は見つかりませんでした。")
+        else:
+            my_history_df = reports_df[reports_df['提出者'] == user].copy()
             
-            if history_df.empty:
+            if my_history_df.empty:
                 st.info("過去の日報履歴は見つかりませんでした。")
             else:
-                for _, h_row in history_df.iterrows():
+                if '日付' in my_history_df.columns:
+                    my_history_df = my_history_df.sort_values('日付', ascending=False).head(30)
+                
+                for _, h_row in my_history_df.iterrows():
                     h_date = h_row.get('日付', '不明')
                     h_arr = h_row.get('出勤時間', '早出なし')
                     h_lev = h_row.get('退勤時間', '定時')
