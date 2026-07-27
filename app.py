@@ -247,18 +247,24 @@ def load_tasks_for_customer(_db, customer_name):
 @st.cache_data(ttl=300)
 def load_user_report_history(user_name, limit_count=30):
     try:
-        _db = firestore.client()
-        # 提出者が一致するものだけをFirestoreから直接引っ張る（通信量節約）
-        docs = _db.collection("daily_reports").where(filter=firestore.FieldFilter("提出者", "==", user_name)).stream()
+        _db = init_firebase()
+        if not _db:
+            return pd.DataFrame()
+            
+        # ▼ 修正ポイント: どんなバージョンでも確実に動く安全な命令の書き方に変更
+        docs = _db.collection("daily_reports").where("提出者", "==", user_name).stream()
+        
         records = [doc.to_dict() | {'id': doc.id} for doc in docs]
         if not records:
             return pd.DataFrame()
+            
         df = pd.DataFrame(records)
         if '日付' in df.columns:
             # 日付で並び替えて最新の limit_count 件だけにする
             df = df.sort_values('日付', ascending=False).head(limit_count)
         return df
     except Exception as e:
+        print(f"履歴読み込みエラー: {e}")
         return pd.DataFrame()
 
 # =======================================================================
