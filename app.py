@@ -675,6 +675,14 @@ def show_daily_report():
     with st.spinner("提出状況を確認しています..."):
         reports_df = load_from_firestore(db, "daily_reports")
         
+        # ▼ 追加：未提出判定用に直近の作業記録もここで取得しておく
+        in_prog_df_check = load_from_firestore(db, "in_progress")
+        comp_df_check = load_from_firestore(db, "completed", days_limit=3000)
+        all_tasks_check_df = pd.concat([in_prog_df_check, comp_df_check], ignore_index=True) if not in_prog_df_check.empty or not comp_df_check.empty else pd.DataFrame()
+        if not all_tasks_check_df.empty and '作成日時' in all_tasks_check_df.columns:
+            all_tasks_check_df['作成日時_dt'] = pd.to_datetime(all_tasks_check_df['作成日時'], utc=True).dt.tz_convert('Asia/Tokyo')
+            all_tasks_check_df['日付_str'] = all_tasks_check_df['作成日時_dt'].dt.strftime('%Y-%m-%d')
+        
     today = datetime.now(timezone(timedelta(hours=9))).date()
     
     st.markdown("<h5 style='font-size: clamp(0.9rem, 3.5vw, 1.1rem); margin-bottom: 10px;'>📅 直近1週間の提出状況</h5>", unsafe_allow_html=True)
@@ -692,9 +700,29 @@ def show_daily_report():
             if not reports_df[(reports_df['提出者'] == user) & (reports_df['日付'] == d_str)].empty:
                 is_submitted = True
                 
+        # ▼ 追加：その日に「自分の作業」があったかどうかを判定
+        has_task = False
+        if not is_submitted and not all_tasks_check_df.empty and '日付_str' in all_tasks_check_df.columns:
+            day_tasks = all_tasks_check_df[all_tasks_check_df['日付_str'] == d_str]
+            for _, row in day_tasks.iterrows():
+                if row.get('入力者名') == user:
+                    has_task = True
+                    break
+                co_workers = row.get('共同作業者', [])
+                if isinstance(co_workers, list) and user in co_workers:
+                    has_task = True
+                    break
+                if isinstance(co_workers, str) and user in co_workers:
+                    has_task = True
+                    break
+                
         if is_submitted:
             bg_color, text_color, border_color = "#d1fae5", "#065f46", "#34d399"
             status_text = "✅済"
+        elif has_task and d < today:
+            # ▼ 追加：作業があるのに未提出（過去）の場合
+            bg_color, text_color, border_color = "#fee2e2", "#991b1b", "#f87171"
+            status_text = "⚠️未提出"
         elif d == today:
             bg_color, text_color, border_color = "#fef3c7", "#92400e", "#fbbf24"
             status_text = "📝今日"
