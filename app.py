@@ -672,7 +672,7 @@ def show_daily_report():
             load_tasks_for_customer.clear()
             st.rerun()
     
-    with st.spinner("提出状況を確認しています..."):
+    with st.spinner("提出状況と作業記録を確認しています..."):
         reports_df = load_from_firestore(db, "daily_reports")
         
         # ▼ 追加：未提出判定用に直近の作業記録もここで取得しておく
@@ -685,9 +685,48 @@ def show_daily_report():
         
     today = datetime.now(timezone(timedelta(hours=9))).date()
     
-    st.markdown("<h5 style='font-size: clamp(0.9rem, 3.5vw, 1.1rem); margin-bottom: 10px;'>📅 直近1週間の提出状況</h5>", unsafe_allow_html=True)
+    if 'report_target_date' not in st.session_state:
+        st.session_state.report_target_date = today
+
+    target_date = st.session_state.report_target_date
+    target_date_str = target_date.strftime('%Y-%m-%d')
     
-    html_blocks = ['<div style="display: flex; justify-content: space-between; gap: 4px; margin-bottom: 20px;">']
+    st.markdown("<h5 style='font-size: clamp(0.9rem, 3.5vw, 1.1rem); margin-bottom: 10px;'>📅 日付をタップして提出（または確認）してください</h5>", unsafe_allow_html=True)
+    
+    # CSSの魔法を使って、ボタンを元のカラフルな見た目に塗り替える
+    st.markdown("""
+        <style>
+        .report-btn-container button {
+            padding: 0.2rem 0rem !important;
+            min-height: 0px !important;
+            font-size: clamp(0.6rem, 2.5vw, 0.85rem) !important;
+            font-weight: bold !important;
+        }
+        .report-btn-container button:has(p:contains("⚠️")), .report-btn-container button:has(div:contains("⚠️")), .report-btn-container button:has(span:contains("⚠️")) {
+            background-color: #fee2e2 !important;
+            border-color: #f87171 !important;
+            color: #991b1b !important;
+        }
+        .report-btn-container button:has(p:contains("✅")), .report-btn-container button:has(div:contains("✅")), .report-btn-container button:has(span:contains("✅")) {
+            background-color: #d1fae5 !important;
+            border-color: #34d399 !important;
+            color: #065f46 !important;
+        }
+        .report-btn-container button:has(p:contains("📝")), .report-btn-container button:has(div:contains("📝")), .report-btn-container button:has(span:contains("📝")) {
+            background-color: #fef3c7 !important;
+            border-color: #fbbf24 !important;
+            color: #92400e !important;
+        }
+        .report-btn-container button:has(p:contains("－")), .report-btn-container button:has(div:contains("－")), .report-btn-container button:has(span:contains("－")) {
+            background-color: #f3f4f6 !important;
+            border-color: #e5e7eb !important;
+            color: #6b7280 !important;
+        }
+        </style>
+    """, unsafe_allow_html=True)
+
+    st.markdown('<div class="report-btn-container">', unsafe_allow_html=True)
+    cols = st.columns(7)
     
     for i in range(7):
         d = today - timedelta(days=6-i)
@@ -700,7 +739,6 @@ def show_daily_report():
             if not reports_df[(reports_df['提出者'] == user) & (reports_df['日付'] == d_str)].empty:
                 is_submitted = True
                 
-        # ▼ 追加：その日に「自分の作業」があったかどうかを判定
         has_task = False
         if not is_submitted and not all_tasks_check_df.empty and '日付_str' in all_tasks_check_df.columns:
             day_tasks = all_tasks_check_df[all_tasks_check_df['日付_str'] == d_str]
@@ -717,38 +755,31 @@ def show_daily_report():
                     break
                 
         if is_submitted:
-            bg_color, text_color, border_color = "#d1fae5", "#065f46", "#34d399"
             status_text = "✅済"
         elif has_task and d < today:
-            # ▼ 追加：作業があるのに未提出（過去）の場合
-            bg_color, text_color, border_color = "#fee2e2", "#991b1b", "#f87171"
             status_text = "⚠️未提出"
         elif d == today:
-            bg_color, text_color, border_color = "#fef3c7", "#92400e", "#fbbf24"
             status_text = "📝今日"
         else:
-            bg_color, text_color, border_color = "#f3f4f6", "#6b7280", "#e5e7eb"
             status_text = "－"
             
-        date_weight = "bold" if d == today else "normal"
-        date_color = "#333" if d == today else "#666"
-            
-        block = f'''<div style="flex: 1; text-align: center; font-size: clamp(0.6rem, 2.5vw, 0.85rem);">
-<div style="color: {date_color}; font-weight: {date_weight}; margin-bottom: 4px; line-height: 1.2;">{disp_date}<br>({day_label})</div>
-<div style="background-color: {bg_color}; color: {text_color}; padding: 4px 0; border-radius: 6px; border: 1px solid {border_color}; font-weight: bold; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;" title="{status_text}">{status_text}</div>
-</div>'''
-        html_blocks.append(block)
+        is_selected = (d == target_date)
+        date_color = "#2563eb" if is_selected else ("#333" if d == today else "#666")
+        date_weight = "bold" if is_selected or d == today else "normal"
         
-    html_blocks.append('</div>')
-    st.markdown("".join(html_blocks), unsafe_allow_html=True)
+        with cols[i]:
+            # 日付の表示
+            st.markdown(f"<div style='text-align: center; color: {date_color}; font-weight: {date_weight}; margin-bottom: 4px; font-size: clamp(0.6rem, 2.5vw, 0.85rem); line-height: 1.2;'>{disp_date}<br>({day_label})</div>", unsafe_allow_html=True)
+            
+            # ボタンスタイル（選択中の場合は標準機能でも強調させる）
+            btn_type = "primary" if is_selected else "secondary"
+            if st.button(status_text, key=f"btn_day_{i}_{d_str}", type=btn_type, use_container_width=True):
+                st.session_state.report_target_date = d
+                st.rerun()
+
+    st.markdown('</div>', unsafe_allow_html=True)
                 
     st.divider()
-    
-    target_date = st.date_input(
-        "📅 提出（または確認）する対象日を選択してください",
-        value=today
-    )
-    target_date_str = target_date.strftime('%Y-%m-%d')
 
     is_target_submitted = False
     submitted_report = None
