@@ -1115,27 +1115,27 @@ def show_admin_dashboard():
             st.rerun()
         
     st.divider()
-    
-    with st.spinner("データベースから日報と作業記録を取得中..."):
-        reports_df = load_from_firestore(db, "daily_reports")
-        
-        in_prog_df = load_from_firestore(db, "in_progress")
-        comp_df = load_from_firestore(db, "completed", days_limit=3000)
-        
-        if not in_prog_df.empty:
-            in_prog_df['_collection'] = "in_progress"
-        if not comp_df.empty:
-            comp_df['_collection'] = "completed"
-            
-        all_tasks_df = pd.concat([in_prog_df, comp_df], ignore_index=True) if not in_prog_df.empty or not comp_df.empty else pd.DataFrame()
-        today_tasks_df = pd.DataFrame()
-        
+        if not in_prog_df.empty or not comp_df.empty:
+            all_tasks_df = pd.concat([in_prog_df, comp_df], ignore_index=True)
+        else:
+            all_tasks_df = pd.DataFrame()
+
         if not all_tasks_df.empty and '作成日時' in all_tasks_df.columns:
             all_tasks_df['作成日時_dt'] = pd.to_datetime(all_tasks_df['作成日時'], utc=True).dt.tz_convert('Asia/Tokyo')
 
-    tab_report, tab_fix = st.tabs(["📊 日報・作業記録の確認", "🛠️ 未照合データの一括修正"])
+    if 'admin_tab_selection' not in st.session_state:
+        st.session_state.admin_tab_selection = "📊 日報・作業記録の確認"
+
+    admin_tab = st.radio(
+        "管理者画面メニュー",
+        ["📊 日報・作業記録の確認", "🛠️ 未照合データの一括修正"],
+        horizontal=True,
+        label_visibility="collapsed",
+        key="admin_tab_selection"
+    )
+    st.divider()
     
-    with tab_report:
+    if admin_tab == "📊 日報・作業記録の確認":
         col1, col2, col3 = st.columns([1.5, 2, 1.5])
         with col1:
             target_date = st.date_input("📅 表示する日付", value=datetime.now(timezone(timedelta(hours=9))).date())
@@ -1311,7 +1311,7 @@ def show_admin_dashboard():
                     if photo and isinstance(photo, str) and photo.startswith('data:image'):
                         st.image(photo, caption=f"{worker}さんからの添付写真", use_container_width=True)
 
-    with tab_fix:
+    elif admin_tab == "🛠️ 未照合データの一括修正":
         st.markdown("現場が「仮の名前」で入力した過去の作業記録を、予定表の「正式な名前」に一括で書き換えます。")
         
         st.markdown("##### Step 1: 検索条件と予定表データの設定")
