@@ -86,6 +86,7 @@ def init_firebase():
 @st.cache_data(ttl=3600)
 def load_csv_data(file_path):
     if file_path == SCHEDULE_FILE and 'manual_schedule_df' in st.session_state: return st.session_state.manual_schedule_df
+    if file_path == SCHEDULE_M_FILE and 'manual_schedule_m_df' in st.session_state: return st.session_state.manual_schedule_m_df
     if file_path == SCHEDULE_FILE and "SCHEDULE_CSV_URL" in st.secrets and st.secrets["SCHEDULE_CSV_URL"]:
         try: return pd.read_csv(st.secrets["SCHEDULE_CSV_URL"], encoding="utf-8-sig")
         except: pass 
@@ -794,17 +795,28 @@ def main_app():
     with st.sidebar.expander("🛠️ 管理者メニュー"):
         st.markdown("**■ 予定表の手動アップロード**")
         st.info("朝の自動更新が失敗した際のフェイルセーフです。")
-        uploaded_file = st.file_uploader("予定表 (schedule.csv) をアップロード", type=['csv'], label_visibility="collapsed")
-        if uploaded_file is not None:
-            try:
-                df = pd.read_csv(uploaded_file, encoding="utf-8-sig")
-                st.session_state.manual_schedule_df = df
-                st.success("✅ 手動アップロードされたCSVを適用しました！")
-                if st.button("画面を更新して反映する", use_container_width=True):
-                    load_csv_data.clear()
-                    st.rerun()
-            except Exception as e:
-                st.error(f"読み込みエラー: {e}")
+        uploaded_file = st.file_uploader("予定表 (schedule.csv)", type=['csv'])
+        uploaded_m_file = st.file_uploader("明細 (schedule_m.csv) ※カレンダー用", type=['csv'])
+        
+        if st.button("CSVを適用する", use_container_width=True):
+            success_count = 0
+            if uploaded_file is not None:
+                try:
+                    st.session_state.manual_schedule_df = pd.read_csv(uploaded_file, encoding="utf-8-sig")
+                    success_count += 1
+                except Exception as e:
+                    st.error(f"予定表読み込みエラー: {e}")
+            if uploaded_m_file is not None:
+                try:
+                    st.session_state.manual_schedule_m_df = pd.read_csv(uploaded_m_file, encoding="utf-8-sig")
+                    success_count += 1
+                except Exception as e:
+                    st.error(f"明細読み込みエラー: {e}")
+                    
+            if success_count > 0:
+                st.success(f"✅ {success_count}個のファイルを適用しました！")
+                load_csv_data.clear()
+                st.rerun()
 
         st.divider()
         st.markdown("**■ 日報データの抽出 (CSV)**")
