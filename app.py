@@ -86,6 +86,7 @@ def init_firebase():
 @st.cache_data(ttl=3600)
 def load_csv_data(file_path):
     if file_path == SCHEDULE_FILE and 'manual_schedule_df' in st.session_state: return st.session_state.manual_schedule_df
+    if file_path == SCHEDULE_M_FILE and 'manual_schedule_m_df' in st.session_state: return st.session_state.manual_schedule_m_df
     if file_path == SCHEDULE_FILE and "SCHEDULE_CSV_URL" in st.secrets and st.secrets["SCHEDULE_CSV_URL"]:
         try: return pd.read_csv(st.secrets["SCHEDULE_CSV_URL"], encoding="utf-8-sig")
         except: pass 
@@ -116,26 +117,30 @@ def load_tasks_for_customer(_db, customer_name):
                 df = pd.DataFrame(records)
                 if "製品名" in df.columns:
                     f_df = df[df["製品名"] == customer_name]
-                    if not f_df.empty: all_tasks.extend(f_df.to_dict('records'))
-        except: pass
-    return pd.DataFrame(all_tasks) if all_tasks else pd.DataFrame()
+                    if not f_df.empty:
+                        all_tasks.append(f_df)
+        except Exception:
+            pass
+    return pd.concat(all_tasks, ignore_index=True) if all_tasks else pd.DataFrame()
 
-def handle_db_write(operation, success_message, error_message, rerun_on_success=True):
+def handle_db_write(operation, success_message, error_message, rerun_on_success=True, view_key='sub_view'):
     try:
         with st.spinner("処理中..."):
             if not firebase_admin._apps: init_firebase()
             operation()
             st.session_state.success_msg = success_message
-            st.session_state.sub_view = 'SELECT_PROCESS'
+            st.session_state[view_key] = 'SELECT_PROCESS' if view_key == 'sub_view' else 'SELECT'
             st.session_state.pop('record_to_copy', None)
+            st.session_state.pop('cal_record_to_copy', None)
+            st.session_state.pop('cal_bulk_items', None)
             if rerun_on_success:
                 load_from_firestore.clear(); load_tasks_for_customer.clear(); st.rerun()
     except Exception as e: st.error(f"{error_message}: {e}")
 
-def handle_update(doc_id, data_dict): handle_db_write(lambda: firestore.client().collection("in_progress").document(doc_id).update(data_dict), "記録を更新しました。", "更新中にエラー")
-def handle_add_in_progress(data_dict): handle_db_write(lambda: firestore.client().collection("in_progress").add(data_dict), f"工程「{data_dict['工程名']}」を追加しました。", "追加中にエラー")
+def handle_update(doc_id, data_dict, view_key='sub_view'): handle_db_write(lambda: firestore.client().collection("in_progress").document(doc_id).update(data_dict), "記録を更新しました。", "更新中にエラー", view_key=view_key)
+def handle_add_in_progress(data_dict, view_key='sub_view'): handle_db_write(lambda: firestore.client().collection("in_progress").add(data_dict), f"工程「{data_dict['工程名']}」を追加しました。", "追加中にエラー", view_key=view_key)
 
-def handle_completion(new_data_dict):
+def handle_completion(new_data_dict, view_key='sub_view'):
     def op():
         db_b = firestore.client().batch()
         ip_df = st.session_state.get('in_progress_df', pd.DataFrame())
@@ -148,9 +153,9 @@ def handle_completion(new_data_dict):
         new_data_dict['完了日時'] = firestore.SERVER_TIMESTAMP
         db_b.set(firestore.client().collection("completed").document(), new_data_dict)
         db_b.commit()
-    handle_db_write(op, f"✅ 「{new_data_dict['製品名']}」を確定しました。", "完了処理中にエラー")
+    handle_db_write(op, f"✅ 「{new_data_dict['製品名']}」を確定しました。", "完了処理中にエラー", view_key=view_key)
 
-def handle_product_completion(product_name):
+def handle_product_completion(product_name, view_key='sub_view'):
     def op():
         db_b = firestore.client().batch()
         ip_df = st.session_state.get('in_progress_df', pd.DataFrame())
@@ -164,14 +169,16 @@ def handle_product_completion(product_name):
                 mc += 1
         if mc == 0: return st.warning("記録が見つかりません。")
         db_b.commit()
-    handle_db_write(op, f"✅ 「{product_name}」を作業完了にしました。", "完了処理中にエラー")
+    handle_db_write(op, f"✅ 「{product_name}」を作業完了にしました。", "完了処理中にエラー", view_key=view_key)
 
-def process_form(is_edit_mode=False, default_data=None):
+def process_form(is_edit_mode=False, default_data=None, view_key='sub_view', is_calendar=False, bulk_items=None):
     default_data = default_data or {}
     product_name = default_data.get('製品名', st.session_state.get('selected_product', ''))
     process_name = default_data.get('工程名', st.session_state.get('selected_process', ''))
     
-    st.markdown(f"<h2 style='font-size: clamp(0.9rem, 3.5vw, 1.6rem); margin-bottom: 0;'>Step 2: 「{product_name}」の作業内容を記録</h2>", unsafe_allow_html=True)
+    is_bulk = bulk_items is not None and len(bulk_items) > 0
+    title_suffix = f" （一括 {len(bulk_items)}件）" if is_bulk else ""
+    st.markdown(f"<h2 style='font-size: clamp(0.9rem, 3.5vw, 1.6rem); margin-bottom: 0;'>Step 2: 「{product_name}」の作業内容を記録{title_suffix}</h2>", unsafe_allow_html=True)
     st.markdown(f"<h3 style='font-size: clamp(0.8rem, 3vw, 1.2rem); color: #555; margin-top: 5px;'>工程: <b>{process_name}</b></h3>", unsafe_allow_html=True)
     
     schedule_df = load_csv_data(SCHEDULE_FILE)
@@ -225,7 +232,14 @@ def process_form(is_edit_mode=False, default_data=None):
         
         st.divider()
         st.subheader("作業実績")
-        qty = 0 if is_setup_only else st.number_input("出来数", min_value=0, step=1, value=int(default_data.get('出来数', 0)), disabled=is_setup_only)
+        
+        if is_bulk:
+            total_qty = sum(item.get('出来数', 0) for item in bulk_items)
+            qty = st.number_input("出来数（チェックした項目の合計）", min_value=0, value=int(total_qty), disabled=True)
+            st.info("※一括登録のため、出来数は各会社の合算値が表示されています。")
+        else:
+            qty = 0 if is_setup_only else st.number_input("出来数", min_value=0, step=1, value=int(default_data.get('出来数', 0)), disabled=is_setup_only)
+        
         workers = st.number_input("作業人数（合計）", min_value=0.5, step=0.5, value=float(default_data.get('作業人数', 1.0)), format="%.1f")
         
         base_w = ASAHIKAWA_MEMBERS if user_loc == "旭川" else SAPPORO_MEMBERS if user_loc == "札幌" else WORKER_NAMES
@@ -286,12 +300,14 @@ def process_form(is_edit_mode=False, default_data=None):
         btn_sub = cb1.form_submit_button("更新する" if is_edit_mode else "作業中として追加", type="primary" if is_edit_mode else "secondary", use_container_width=True)
         btn_com = None if is_edit_mode else cb2.form_submit_button("この内容で最終完了", type="primary", use_container_width=True)
         if cb3.form_submit_button("キャンセル"):
-            st.session_state.sub_view = 'SELECT_PROCESS'
+            st.session_state[view_key] = 'SELECT_PROCESS' if view_key == 'sub_view' else 'SELECT'
             st.session_state.pop('record_to_copy', None)
+            st.session_state.pop('cal_record_to_copy', None)
+            st.session_state.pop('cal_bulk_items', None)
             st.rerun()
 
         def submit_data(status):
-            if not is_setup_only and qty <= 0: return st.error("❌ 出来数は1以上で入力してください。")
+            if not is_setup_only and qty <= 0 and not is_bulk: return st.error("❌ 出来数は1以上で入力してください。")
             wm, st_str, en_str = 0, "", ""
             if process_name == "断裁": wm = work_mins_in
             elif not is_setup_only:
@@ -300,16 +316,40 @@ def process_form(is_edit_mode=False, default_data=None):
                 wm = (datetime.combine(datetime.today(), en_o) - datetime.combine(datetime.today(), st_o)).total_seconds() / 60
                 st_str, en_str = st_o.strftime('%H:%M'), en_o.strftime('%H:%M')
             
-            f_data = {
+            base_f_data = {
                 "入力者名": st.session_state.logged_in_user, "共同作業者": sel_cw, "拠点": user_loc, "使用機械": mach_sel,
-                "記録ID": default_data.get('記録ID', datetime.now().strftime("%Y%m%d%H%M%S%f")),
-                "製品名": product_name, "工程名": process_name, "詳細": fin_dtl, "開始時間": st_str, "終了時間": en_str,
-                "作業時間_分": int(wm), "出来数": int(qty), "作業人数": float(workers), "ステータス": status, "備考": rmks,
-                "作成日時": firestore.SERVER_TIMESTAMP, "セット人数": float(set_w), "セット時間_分": int(set_t), "回転数": int(rot_s)
+                "工程名": process_name, "開始時間": st_str, "終了時間": en_str,
+                "作業人数": float(workers), "ステータス": status, "備考": rmks,
+                "作成日時": firestore.SERVER_TIMESTAMP, "セット人数": float(set_w), "セット時間_分": int(set_t), "回転数": int(rot_s),
+                "is_calendar": is_calendar
             }
-            if status == "完了": handle_completion(f_data)
-            elif is_edit_mode: handle_update(default_data.get('id'), f_data)
-            else: handle_add_in_progress(f_data)
+            
+            if is_bulk:
+                wm_per = int(wm / len(bulk_items)) if wm > 0 else 0
+                def op():
+                    b = firestore.client().batch()
+                    for i, item in enumerate(bulk_items):
+                        f = base_f_data.copy()
+                        f.update({
+                            "記録ID": f"{datetime.now().strftime('%Y%m%d%H%M%S%f')}_{i}",
+                            "製品名": product_name, "詳細": item.get('詳細', ''), "作業時間_分": wm_per, "出来数": int(item.get('出来数', 0))
+                        })
+                        if status == "完了":
+                            f['完了日時'] = firestore.SERVER_TIMESTAMP
+                            b.set(firestore.client().collection("completed").document(), f)
+                        else:
+                            b.set(firestore.client().collection("in_progress").document(), f)
+                    b.commit()
+                handle_db_write(op, f"✅ {len(bulk_items)}件を一括で{status}として登録しました。", "一括登録中にエラー", view_key=view_key)
+            else:
+                f_data = base_f_data.copy()
+                f_data.update({
+                    "記録ID": default_data.get('記録ID', datetime.now().strftime("%Y%m%d%H%M%S%f")),
+                    "製品名": product_name, "詳細": fin_dtl, "作業時間_分": int(wm), "出来数": int(qty)
+                })
+                if status == "完了": handle_completion(f_data, view_key=view_key)
+                elif is_edit_mode: handle_update(default_data.get('id'), f_data, view_key=view_key)
+                else: handle_add_in_progress(f_data, view_key=view_key)
 
         if btn_sub: submit_data("作業中")
         if btn_com: submit_data("完了")
@@ -396,7 +436,11 @@ def show_daily_report():
     if t_tasks.empty: st.info("この日の作業記録はありません。")
     else:
         for _, r in t_tasks.iterrows():
-            wt = int(r.get('作業時間_分',0))
+            try:
+                wt_raw = r.get('作業時間_分', 0)
+                wt = int(float(wt_raw)) if pd.notna(wt_raw) and str(wt_raw).strip() != "" else 0
+            except:
+                wt = 0
             w_str = f"{wt//60}時間{wt%60}分" if wt>0 else ""
             st.markdown(f"- `{r.get('開始時間','')}~ {w_str}` **{r.get('製品名','')}** > {r.get('工程名','')} [{r.get('使用機械','')}] ({r.get('出来数',0)}個) / {r.get('詳細','')}")
 
@@ -616,7 +660,12 @@ def show_admin_dashboard():
                                 helper_badge = "👑機長"
                                 
                             start_t = t_row.get('開始時間', '')
-                            work_m = int(t_row.get('作業時間_分', 0))
+                            try:
+                                work_m_raw = t_row.get('作業時間_分', 0)
+                                work_m = int(float(work_m_raw)) if pd.notna(work_m_raw) and str(work_m_raw).strip() != "" else 0
+                            except:
+                                work_m = 0
+                            
                             if work_m > 0:
                                 h = work_m // 60
                                 m = work_m % 60
@@ -794,17 +843,28 @@ def main_app():
     with st.sidebar.expander("🛠️ 管理者メニュー"):
         st.markdown("**■ 予定表の手動アップロード**")
         st.info("朝の自動更新が失敗した際のフェイルセーフです。")
-        uploaded_file = st.file_uploader("予定表 (schedule.csv) をアップロード", type=['csv'], label_visibility="collapsed")
-        if uploaded_file is not None:
-            try:
-                df = pd.read_csv(uploaded_file, encoding="utf-8-sig")
-                st.session_state.manual_schedule_df = df
-                st.success("✅ 手動アップロードされたCSVを適用しました！")
-                if st.button("画面を更新して反映する", use_container_width=True):
-                    load_csv_data.clear()
-                    st.rerun()
-            except Exception as e:
-                st.error(f"読み込みエラー: {e}")
+        uploaded_file = st.file_uploader("予定表 (schedule.csv)", type=['csv'])
+        uploaded_m_file = st.file_uploader("明細 (schedule_m.csv) ※カレンダー用", type=['csv'])
+        
+        if st.button("CSVを適用する", use_container_width=True):
+            success_count = 0
+            if uploaded_file is not None:
+                try:
+                    st.session_state.manual_schedule_df = pd.read_csv(uploaded_file, encoding="utf-8-sig")
+                    success_count += 1
+                except Exception as e:
+                    st.error(f"予定表読み込みエラー: {e}")
+            if uploaded_m_file is not None:
+                try:
+                    st.session_state.manual_schedule_m_df = pd.read_csv(uploaded_m_file, encoding="utf-8-sig")
+                    success_count += 1
+                except Exception as e:
+                    st.error(f"明細読み込みエラー: {e}")
+                    
+            if success_count > 0:
+                st.success(f"✅ {success_count}個のファイルを適用しました！")
+                load_csv_data.clear()
+                st.rerun()
 
         st.divider()
         st.markdown("**■ 日報データの抽出 (CSV)**")
@@ -875,9 +935,13 @@ def main_app():
 
             sel_loc = st.selectbox("拠点", loc_opts, index=loc_opts.index(st.session_state.get("user_location", "すべて")) if st.session_state.get("user_location", "すべて") in loc_opts else 0)
             d_df = in_progress_df.copy()
-            if not d_df.empty and "製品名" in d_df.columns:
-                if '拠点' not in d_df.columns: d_df['拠点'] = '未設定'
-                if sel_loc != "すべて": d_df = d_df[d_df['拠点'] == sel_loc]
+            if not d_df.empty:
+                # カレンダーのタスクを通常工程一覧から隠す
+                if 'is_calendar' in d_df.columns:
+                    d_df = d_df[d_df['is_calendar'] != True]
+                if "製品名" in d_df.columns:
+                    if '拠点' not in d_df.columns: d_df['拠点'] = '未設定'
+                    if sel_loc != "すべて": d_df = d_df[d_df['拠点'] == sel_loc]
 
             c_f, c_l = st.columns(2)
             with c_f: 
@@ -903,50 +967,153 @@ def main_app():
                                 st.divider()
 
     elif main_view == "📅 カレンダー一括管理":
-        st.header("カレンダー一括管理")
-        sch = load_csv_data(SCHEDULE_FILE)
-        sch_m = load_csv_data(SCHEDULE_M_FILE)
-        if sch.empty or sch_m.empty: 
-            st.warning("予定表CSV または schedule_m.csv が読み込めません。（サイドバーからアップロードしてください）")
+        in_progress_df = load_from_firestore(db, "in_progress")
+        st.session_state.in_progress_df = in_progress_df
+        cal_sub_view = st.session_state.get('cal_sub_view', 'SELECT')
+        
+        if cal_sub_view == 'INPUT_FORM':
+            process_form(default_data=st.session_state.get('cal_record_to_copy'), view_key='cal_sub_view', is_calendar=True)
+        elif cal_sub_view == 'EDIT_FORM':
+            process_form(is_edit_mode=True, default_data=st.session_state.get('cal_record_to_edit'), view_key='cal_sub_view', is_calendar=True)
+        elif cal_sub_view == 'INPUT_FORM_BULK':
+            process_form(default_data=st.session_state.get('cal_record_to_copy'), view_key='cal_sub_view', is_calendar=True, bulk_items=st.session_state.get('cal_bulk_items'))
         else:
-            cal_sch = sch[sch[SCHEDULE_COL_DETAILS].astype(str).str.contains('カレンダー', na=False)] if SCHEDULE_COL_DETAILS in sch.columns else pd.DataFrame()
-            if cal_sch.empty: 
-                st.info("予定表に「カレンダー」指定の案件がありません。")
-            else:
-                p_prod = st.selectbox("親カレンダー", [""] + sorted(cal_sch['品名'].dropna().unique().tolist()))
-                if p_prod:
-                    c_code = cal_sch[cal_sch['品名']==p_prod].iloc[0].get('得意先コード')
-                    if '得意先コード' in sch_m.columns:
-                        t_m = sch_m[sch_m['得意先コード'] == c_code]
+            st.session_state.cal_sub_view = 'SELECT'
+            st.header("カレンダー一括管理")
+            sch = load_csv_data(SCHEDULE_FILE)
+            sch_m = load_csv_data(SCHEDULE_M_FILE)
+            
+            # 通常工程と同じように左右に分割
+            c_left, c_right = st.columns([1.3, 1])
+            with c_left:
+                if sch.empty or sch_m.empty: 
+                    st.warning("予定表CSV または schedule_m.csv が読み込めません。（サイドバーからアップロードしてください）")
+                else:
+                    cal_sch = sch[sch[SCHEDULE_COL_DETAILS].astype(str).str.contains('カレンダー', na=False)] if SCHEDULE_COL_DETAILS in sch.columns else pd.DataFrame()
+                    if cal_sch.empty: 
+                        st.info("予定表に「カレンダー」指定の案件がありません。")
                     else:
-                        t_m = sch_m # 項目が見つからない場合のフォールバック
-                    
-                    if t_m.empty: 
-                        st.warning("このカレンダーの明細が見つかりません。")
-                    else: 
-                        st.success(f"{len(t_m)}件の明細が見つかりました。")
+                        c_names = sorted(cal_sch['得意先名'].dropna().unique().tolist()) if '得意先名' in cal_sch.columns else []
+                        sel_c = st.selectbox("得意先名で絞り込み", ["すべての得意先"] + c_names, key="cal_customer_sel")
                         
-                        target_companies = t_m['納品書明細'].dropna().unique().tolist() if '納品書明細' in t_m.columns else t_m.iloc[:, 0].dropna().unique().tolist()
+                        f_cal_sch = cal_sch[cal_sch['得意先名'] == sel_c] if sel_c != "すべての得意先" else cal_sch
+                        p_prod = st.selectbox("カレンダーの品名を選択", [""] + sorted(f_cal_sch['品名'].dropna().unique().tolist()))
                         
-                        st.write("対象会社リスト（チェックして一括処理）")
-                        checked_comps = []
-                        for comp in target_companies:
-                            if st.checkbox(str(comp), key=f"cal_chk_{comp}"):
-                                checked_comps.append(comp)
-                        
-                        sel_proc = st.selectbox("一括登録する工程", CALENDAR_PROCESS_OPTIONS)
-                        c1, c2 = st.columns(2)
-                        if c1.button("一括で作業中に追加", type="primary"):
-                            if not checked_comps or not sel_proc: st.error("会社と工程を選択してください。")
+                        if p_prod:
+                            parent_row = cal_sch[cal_sch['品名']==p_prod].iloc[0]
+                            denpyo_col = next((col for col in sch.columns if '伝票' in col), None)
+                            denpyo_m_col = next((col for col in sch_m.columns if '伝票' in col), None)
+                            
+                            t_m = pd.DataFrame()
+                            if denpyo_col and denpyo_m_col:
+                                denpyo_val = parent_row.get(denpyo_col)
+                                if pd.notna(denpyo_val):
+                                    t_m = sch_m[sch_m[denpyo_m_col] == denpyo_val]
                             else:
-                                b = db.batch()
-                                for c in checked_comps:
-                                    d = {"製品名": p_prod, "詳細": c, "工程名": sel_proc, "ステータス": "作業中", "入力者名": st.session_state.logged_in_user, "作成日時": firestore.SERVER_TIMESTAMP}
-                                    b.set(db.collection("in_progress").document(), d)
-                                b.commit()
-                                st.success("一括追加しました。")
-                                load_from_firestore.clear()
-                                st.rerun()
+                                c_code = parent_row.get('得意先コード')
+                                if pd.notna(c_code) and '得意先コード' in sch_m.columns:
+                                    t_m = sch_m[sch_m['得意先コード'] == c_code]
+                            
+                            exclude_words = ["区分け", "包代", "包装", "パレット", "箱代", "PUR", "送料", "運賃", "ダンボール", "段ボール", "値引き", "手数料"]
+                            target_items = {}
+                            if not t_m.empty:
+                                for _, row in t_m.iterrows():
+                                    content_val = str(row.get('内容', '')).strip()
+                                    if content_val == 'nan' or not content_val:
+                                        content_val = str(row.get('納品書明細', '')).strip()
+                                    if content_val == 'nan' or not content_val:
+                                        continue 
+                                    is_excluded = any(word in content_val for word in exclude_words)
+                                    
+                                    if not is_excluded:
+                                        qty_val = row.get('数量', 0)
+                                        try:
+                                            qty = int(float(qty_val)) if pd.notna(qty_val) else 0
+                                        except:
+                                            qty = 0
+                                        if content_val in target_items:
+                                            target_items[content_val]['数量'] += qty
+                                        else:
+                                            target_items[content_val] = {'会社名': content_val, '数量': qty}
+                            
+                            if not target_items:
+                                st.markdown("### 🔘 単体で登録（名入れがない場合）")
+                                st.info("このカレンダーには名入れが見つかりません。単体として登録します。")
+                                with st.form("single_cal_form"):
+                                    c_proc, c_btn = st.columns([2, 1])
+                                    sel_single = c_proc.selectbox("工程", CALENDAR_PROCESS_OPTIONS, key="single_proc_top")
+                                    if c_btn.form_submit_button("入力を開始する", type="primary", use_container_width=True):
+                                        if not sel_single: st.error("工程を選択してください。")
+                                        else:
+                                            qty = parent_row.get(SCHEDULE_COL_TOTAL_QUANTITY, 0)
+                                            st.session_state.cal_record_to_copy = {
+                                                '製品名': p_prod, '工程名': sel_single, '詳細': "", '出来数': int(qty) if pd.notna(qty) else 0
+                                            }
+                                            st.session_state.cal_sub_view = 'INPUT_FORM'
+                                            st.rerun()
+                            else:
+                                st.markdown("### 📑 複数名入れの一括登録")
+                                st.success(f"{len(target_items)}件の名入れ先（費用項目を除外済）が見つかりました。")
+                                
+                                st.write("対象会社リスト（チェックして一括処理）")
+                                checked_comps = []
+                                is_single_item = (len(target_items) == 1)
+                                for comp, info in target_items.items():
+                                    qty_str = f" （{info['数量']:,}部）" if info['数量'] > 0 else ""
+                                    if st.checkbox(f"{comp}{qty_str}", key=f"cal_chk_{comp}", value=is_single_item):
+                                        checked_comps.append(info)
+                                
+                                sel_proc = st.selectbox("一括登録する工程", CALENDAR_PROCESS_OPTIONS)
+                                c1, c2 = st.columns(2)
+                                if c1.button("一括入力を開始する", type="primary"):
+                                    if not checked_comps or not sel_proc: st.error("会社と工程を選択してください。")
+                                    else:
+                                        st.session_state.cal_record_to_copy = {'製品名': p_prod, '工程名': sel_proc}
+                                        st.session_state.cal_bulk_items = [{'詳細': item['会社名'], '出来数': item['数量']} for item in checked_comps]
+                                        st.session_state.cal_sub_view = 'INPUT_FORM_BULK'
+                                        st.rerun()
+                                        
+                                st.divider()
+                                st.write("💡 【手動追加】リストに無い宛先を1件だけ追加する")
+                                with st.form("manual_add_form"):
+                                    m_comp = st.text_input("追加する名入れ会社名")
+                                    m_qty = st.number_input("部数", min_value=0, step=1, value=0)
+                                    m_proc = st.selectbox("工程", CALENDAR_PROCESS_OPTIONS)
+                                    if st.form_submit_button("この1件の入力を開始", type="secondary"):
+                                        if not m_proc: st.error("工程を選択してください。")
+                                        else:
+                                            st.session_state.cal_record_to_copy = {
+                                                '製品名': p_prod, '工程名': m_proc, '詳細': m_comp.strip(), '出来数': m_qty
+                                            }
+                                            st.session_state.cal_sub_view = 'INPUT_FORM'
+                                            st.rerun()
+
+            with c_right:
+                st.markdown("<h3>カレンダー進行中一覧</h3>", unsafe_allow_html=True)
+                cal_d_df = in_progress_df.copy()
+                if not cal_d_df.empty and 'is_calendar' in cal_d_df.columns:
+                    cal_d_df = cal_d_df[cal_d_df['is_calendar'] == True]
+                else:
+                    cal_d_df = pd.DataFrame() # カレンダーフラグがないものは表示しない
+                    
+                if cal_d_df.empty: 
+                    st.info("作業中のカレンダーはありません。")
+                else:
+                    for p, g in cal_d_df.groupby('製品名'):
+                        with st.expander(f"**{p}**", expanded=True):
+                            c_btn = st.button("親ごと完了", key=f"c_cal_{p}", type="primary")
+                            if c_btn: handle_product_completion(p, view_key='cal_sub_view')
+                            for _, r in g.iterrows():
+                                dtls = r.get('詳細', '')
+                                dtl_str = f" - {dtls}" if dtls else ""
+                                st.caption(f"{r['工程名']}{dtl_str} / 出来数: {r['出来数']}個 / 入力: {r.get('入力者名','')}")
+                                cx, cy, cz = st.columns(3)
+                                if cx.button("編集", key=f"e_cal_{r['id']}"): st.session_state.cal_record_to_edit, st.session_state.cal_sub_view = r.to_dict(), 'EDIT_FORM'; st.rerun()
+                                if cy.button("続き", key=f"cp_cal_{r['id']}"): 
+                                    d = r.to_dict(); d['開始時間'] = d['終了時間'] = ""; d['出来数'] = 0; d.pop('id', None)
+                                    st.session_state.cal_record_to_copy, st.session_state.cal_sub_view = d, 'INPUT_FORM'; st.rerun()
+                                if cz.button("削除", key=f"d_cal_{r['id']}"): db.collection("in_progress").document(r['id']).delete(); load_from_firestore.clear(); st.rerun()
+                                st.divider()
 
     elif main_view == "📦 名入れ一括登録":
         st.header("名入れ工程の進捗管理")
