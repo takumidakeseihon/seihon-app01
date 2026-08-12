@@ -675,66 +675,14 @@ def show_daily_report():
             load_tasks_for_customer.clear()
             st.rerun()
     
-    with st.spinner("提出状況と作業記録を確認しています..."):
+    with st.spinner("提出状況を確認しています..."):
         reports_df = load_from_firestore(db, "daily_reports")
         
-        in_prog_df = load_from_firestore(db, "in_progress")
-        comp_df = load_from_firestore(db, "completed", days_limit=3000)
-        
-        if not in_prog_df.empty:
-            in_prog_df['_collection'] = "in_progress"
-        if not comp_df.empty:
-            comp_df['_collection'] = "completed"
-            
-        all_df = pd.concat([in_prog_df, comp_df], ignore_index=True) if not in_prog_df.empty or not comp_df.empty else pd.DataFrame()
-        
-        if not all_df.empty and '作成日時' in all_df.columns:
-            all_df['作成日時_dt'] = pd.to_datetime(all_df['作成日時'], utc=True).dt.tz_convert('Asia/Tokyo')
-            all_df['日付_str'] = all_df['作成日時_dt'].dt.strftime('%Y-%m-%d')
-            
     today = datetime.now(timezone(timedelta(hours=9))).date()
     
-    if 'report_target_date' not in st.session_state:
-        st.session_state.report_target_date = today
-        
-    target_date = st.session_state.report_target_date
-    target_date_str = target_date.strftime('%Y-%m-%d')
+    st.markdown("<h5 style='font-size: clamp(0.9rem, 3.5vw, 1.1rem); margin-bottom: 10px;'>📅 直近1週間の提出状況</h5>", unsafe_allow_html=True)
     
-    st.markdown("<h5 style='font-size: clamp(0.9rem, 3.5vw, 1.1rem); margin-bottom: 10px;'>📅 日付をタップして提出（または確認）してください</h5>", unsafe_allow_html=True)
-    
-    st.markdown("""
-        <style>
-        .report-btn-container button {
-            padding: 0.2rem 0rem !important;
-            min-height: 0px !important;
-            font-size: clamp(0.6rem, 2.5vw, 0.85rem) !important;
-            font-weight: bold !important;
-        }
-        .report-btn-container button:has(p:contains("⚠️")), .report-btn-container button:has(div:contains("⚠️")), .report-btn-container button:has(span:contains("⚠️")) {
-            background-color: #fee2e2 !important;
-            border-color: #f87171 !important;
-            color: #991b1b !important;
-        }
-        .report-btn-container button:has(p:contains("✅")), .report-btn-container button:has(div:contains("✅")), .report-btn-container button:has(span:contains("✅")) {
-            background-color: #d1fae5 !important;
-            border-color: #34d399 !important;
-            color: #065f46 !important;
-        }
-        .report-btn-container button:has(p:contains("📝")), .report-btn-container button:has(div:contains("📝")), .report-btn-container button:has(span:contains("📝")) {
-            background-color: #fef3c7 !important;
-            border-color: #fbbf24 !important;
-            color: #92400e !important;
-        }
-        .report-btn-container button:has(p:contains("－")), .report-btn-container button:has(div:contains("－")), .report-btn-container button:has(span:contains("－")) {
-            background-color: #f3f4f6 !important;
-            border-color: #e5e7eb !important;
-            color: #6b7280 !important;
-        }
-        </style>
-    """, unsafe_allow_html=True)
-
-    st.markdown('<div class="report-btn-container">', unsafe_allow_html=True)
-    cols = st.columns(7)
+    html_blocks = ['<div style="display: flex; justify-content: space-between; gap: 4px; margin-bottom: 20px;">']
     
     for i in range(7):
         d = today - timedelta(days=6-i)
@@ -747,43 +695,35 @@ def show_daily_report():
             if not reports_df[(reports_df['提出者'] == user) & (reports_df['日付'] == d_str)].empty:
                 is_submitted = True
                 
-        has_task = False
-        if not is_submitted and not all_df.empty and '日付_str' in all_df.columns:
-            day_tasks = all_df[all_df['日付_str'] == d_str]
-            for _, row in day_tasks.iterrows():
-                if row.get('入力者名') == user:
-                    has_task = True
-                    break
-                co_workers = row.get('共同作業者', [])
-                if isinstance(co_workers, list) and user in co_workers:
-                    has_task = True
-                    break
-                if isinstance(co_workers, str) and user in co_workers:
-                    has_task = True
-                    break
-
         if is_submitted:
+            bg_color, text_color, border_color = "#d1fae5", "#065f46", "#34d399"
             status_text = "✅済"
-        elif has_task and d < today:
-            status_text = "⚠️未提出"
         elif d == today:
+            bg_color, text_color, border_color = "#fef3c7", "#92400e", "#fbbf24"
             status_text = "📝今日"
         else:
+            bg_color, text_color, border_color = "#f3f4f6", "#6b7280", "#e5e7eb"
             status_text = "－"
             
-        is_selected = (d == target_date)
-        date_color = "#2563eb" if is_selected else ("#333" if d == today else "#666")
-        date_weight = "bold" if is_selected or d == today else "normal"
+        date_weight = "bold" if d == today else "normal"
+        date_color = "#333" if d == today else "#666"
             
-        with cols[i]:
-            st.markdown(f"<div style='text-align: center; color: {date_color}; font-weight: {date_weight}; margin-bottom: 4px; font-size: clamp(0.6rem, 2.5vw, 0.85rem); line-height: 1.2;'>{disp_date}<br>({day_label})</div>", unsafe_allow_html=True)
-            btn_type = "primary" if is_selected else "secondary"
-            if st.button(status_text, key=f"btn_day_{i}_{d_str}", type=btn_type, use_container_width=True):
-                st.session_state.report_target_date = d
-                st.rerun()
-
-    st.markdown('</div>', unsafe_allow_html=True)
+        block = f'''<div style="flex: 1; text-align: center; font-size: clamp(0.6rem, 2.5vw, 0.85rem);">
+<div style="color: {date_color}; font-weight: {date_weight}; margin-bottom: 4px; line-height: 1.2;">{disp_date}<br>({day_label})</div>
+<div style="background-color: {bg_color}; color: {text_color}; padding: 4px 0; border-radius: 6px; border: 1px solid {border_color}; font-weight: bold; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;" title="{status_text}">{status_text}</div>
+</div>'''
+        html_blocks.append(block)
+        
+    html_blocks.append('</div>')
+    st.markdown("".join(html_blocks), unsafe_allow_html=True)
+                
     st.divider()
+    
+    target_date = st.date_input(
+        "📅 提出（または確認）する対象日を選択してください",
+        value=today
+    )
+    target_date_str = target_date.strftime('%Y-%m-%d')
 
     is_target_submitted = False
     submitted_report = None
@@ -813,10 +753,26 @@ def show_daily_report():
             if submitted_report.get('写真データ'):
                 st.write("- **添付写真:** あり（データベースに保存されています）")
 
+    with st.spinner(f"{target_date.strftime('%Y年%m月%d日')} の作業履歴をまとめています..."):
+        in_prog_df = load_from_firestore(db, "in_progress")
+        comp_df = load_from_firestore(db, "completed", days_limit=3000)
+        
+        if not in_prog_df.empty:
+            in_prog_df['_collection'] = "in_progress"
+        if not comp_df.empty:
+            comp_df['_collection'] = "completed"
+            
+        if not in_prog_df.empty or not comp_df.empty:
+            all_df = pd.concat([in_prog_df, comp_df], ignore_index=True)
+        else:
+            all_df = pd.DataFrame()
+        
     today_tasks = pd.DataFrame()
     other_tasks = pd.DataFrame()
     
-    if not all_df.empty and '作成日時_dt' in all_df.columns:
+    if not all_df.empty and '作成日時' in all_df.columns:
+        all_df['作成日時_dt'] = pd.to_datetime(all_df['作成日時'], utc=True).dt.tz_convert('Asia/Tokyo')
+        
         today_df = all_df[all_df['作成日時_dt'].dt.date == target_date]
         
         def is_involved(row):
@@ -852,8 +808,11 @@ def show_daily_report():
             process = row.get('工程名', '工程不明')
             detail = row.get('詳細', '')
             qty = int(row.get('出来数', 0))
-            machine = row.get('使用機械', '')
+            status = row.get('ステータス', '')
             is_helper = row.get('入力者名') != user
+            
+            machine = row.get('使用機械', '')
+            rotation = int(row.get('回転数', 0)) if pd.notna(row.get('回転数', 0)) else 0
             
             qty_str = f"{qty:,}個"
             setup_badge = " 🔧セットのみ" if qty == 0 else ""
@@ -1060,34 +1019,6 @@ def show_daily_report():
             except Exception as e:
                 st.error(f"日報の送信に失敗しました: {e}")
 
-    # --- 過去履歴の表示 ---
-    st.divider()
-    with st.expander("📂 過去の日報履歴を見る（最新30件）", expanded=False):
-        if not reports_df.empty and '提出者' in reports_df.columns:
-            my_history = reports_df[reports_df['提出者'] == user].copy()
-            if not my_history.empty:
-                my_history = my_history.sort_values(by='日付', ascending=False).head(30)
-                for _, r_row in my_history.iterrows():
-                    h_date = r_row.get('日付', '')
-                    h_arr = r_row.get('出勤時間', '早出なし')
-                    h_lev = r_row.get('退勤時間', '不明')
-                    h_mac = r_row.get('機械の調子', '')
-                    h_note = r_row.get('特記事項', '')
-                    h_hiyari = r_row.get('ヒヤリハット', '')
-                    
-                    h_arr_disp = "通常" if "なし" in str(h_arr) else str(h_arr)
-                    h_lev_disp = "定時" if "なし" in str(h_lev) else str(h_lev)
-                    
-                    st.markdown(f"**{h_date}** (出勤: {h_arr_disp} / 退勤: {h_lev_disp})")
-                    st.caption(f"🔧 {h_mac} | ⚠️ {h_hiyari}")
-                    if h_note:
-                        st.write(f"> {h_note}")
-                    st.divider()
-            else:
-                st.info("過去の日報履歴はありません。")
-        else:
-            st.info("過去の日報履歴はありません。")
-
 # --- 管理者用ダッシュボード（日報確認機能） ---
 def show_admin_dashboard():
     st.markdown("<h2 style='font-size: clamp(1.2rem, 5vw, 2rem); margin-bottom: 1rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;' title='👑 管理者ダッシュボード'>👑 管理者ダッシュボード</h2>", unsafe_allow_html=True)
@@ -1123,18 +1054,16 @@ def show_admin_dashboard():
         reports_df = load_from_firestore(db, "daily_reports")
         
         in_prog_df = load_from_firestore(db, "in_progress")
+        comp_df = load_from_firestore(db, "completed", days_limit=3000)
+        
         if not in_prog_df.empty:
             in_prog_df['_collection'] = "in_progress"
-            
-        comp_df = load_from_firestore(db, "completed", days_limit=3000)
         if not comp_df.empty:
             comp_df['_collection'] = "completed"
             
-        if not in_prog_df.empty or not comp_df.empty:
-            all_tasks_df = pd.concat([in_prog_df, comp_df], ignore_index=True)
-        else:
-            all_tasks_df = pd.DataFrame()
-
+        all_tasks_df = pd.concat([in_prog_df, comp_df], ignore_index=True) if not in_prog_df.empty or not comp_df.empty else pd.DataFrame()
+        today_tasks_df = pd.DataFrame()
+        
         if not all_tasks_df.empty and '作成日時' in all_tasks_df.columns:
             all_tasks_df['作成日時_dt'] = pd.to_datetime(all_tasks_df['作成日時'], utc=True).dt.tz_convert('Asia/Tokyo')
 
@@ -1591,7 +1520,7 @@ def main_app():
                     st.rerun()
             except Exception as e:
                 st.error(f"読み込みエラー: {e}")
-                
+
         st.markdown("**■ カレンダー明細の手動アップロード**")
         uploaded_m_file = st.file_uploader("明細表 (作業予定_m.csv) をアップロード", type=['csv'], label_visibility="collapsed")
         if uploaded_m_file is not None:
@@ -1610,27 +1539,23 @@ def main_app():
         dl_start = st.date_input("開始日", value=datetime.now(timezone(timedelta(hours=9))).date())
         dl_end = st.date_input("終了日", value=datetime.now(timezone(timedelta(hours=9))).date())
         
-        # 抽出用データの準備
         r_df = load_from_firestore(db, "daily_reports")
         if not r_df.empty and '日付' in r_df.columns:
             mask = (r_df['日付'] >= dl_start.strftime('%Y-%m-%d')) & (r_df['日付'] <= dl_end.strftime('%Y-%m-%d'))
             filtered_reports = r_df[mask].copy()
             
             if not filtered_reports.empty:
-                # 拠点情報の追加と画像データ等（長すぎる文字）の整理
                 if '提出者' in filtered_reports.columns:
                     filtered_reports['拠点'] = filtered_reports['提出者'].map(WORKER_TO_LOCATION).fillna('未設定')
                 if '写真データ' in filtered_reports.columns:
                     filtered_reports['写真添付'] = filtered_reports['写真データ'].apply(lambda x: "あり" if str(x).startswith("data:image") else "なし")
                     filtered_reports = filtered_reports.drop(columns=['写真データ'])
                 
-                # 列の並び替えとソート（漏れている作業も追加）
                 cols_order = ['日付', '拠点', '提出者', '出勤時間', '退勤時間', '疲れ具合', '機械の調子', 'ヒヤリハット', '漏れている作業', '特記事項', '関連タスク数', '写真添付', '作成日時']
                 final_cols = [c for c in cols_order if c in filtered_reports.columns] + [c for c in filtered_reports.columns if c not in cols_order]
                 filtered_reports = filtered_reports[final_cols]
                 filtered_reports = filtered_reports.sort_values(by=['日付', '拠点', '提出者'])
                 
-                # ★ ここで文字化け防止のため強制的にバイトデータに変換します
                 csv_data = filtered_reports.to_csv(index=False).encode('utf-8-sig')
                 
                 st.download_button(
@@ -1831,7 +1756,6 @@ def main_app():
         elif schedule_m_df.empty:
             st.warning("カレンダー明細(作業予定_m.csv)が読み込めません。左の黒いサイドバーの「🛠️ 管理者メニュー」から明細CSVを手動でアップロードしてください。")
         else:
-            # 1. schedule.csvからカレンダー案件を抽出
             if SCHEDULE_COL_DETAILS in schedule_df.columns:
                 cal_schedule_df = schedule_df[schedule_df[SCHEDULE_COL_DETAILS].astype(str).str.contains('カレンダー', na=False)]
             else:
@@ -1851,7 +1775,6 @@ def main_app():
                         
                         st.write(f"**得意先:** {parent_customer}")
                         
-                        # 2. schedule_m.csvから明細を抽出 (伝票番号または得意先名で紐付け)
                         target_m_df = pd.DataFrame()
                         if '伝票番号' in schedule_df.columns and '伝票番号' in schedule_m_df.columns and pd.notna(parent_denpyo) and str(parent_denpyo).strip() != "":
                             target_m_df = schedule_m_df[schedule_m_df['伝票番号'] == parent_denpyo]
