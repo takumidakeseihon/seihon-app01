@@ -354,7 +354,14 @@ def show_daily_report():
         is_sub = not reports_df.empty and '提出者' in reports_df.columns and not reports_df[(reports_df['提出者'] == user) & (reports_df['日付'] == d.strftime('%Y-%m-%d'))].empty
         has_w = False
         if not all_df.empty and '作成日時_dt' in all_df.columns:
-            has_w = all_df[all_df['作成日時_dt'].dt.date == d].apply(lambda r: r.get('入力者名') == user or (user in r.get('共同作業者', [])) or (isinstance(r.get('共同作業者'), str) and user in r.get('共同作業者')), axis=1).any()
+            d_df = all_df[all_df['作成日時_dt'].dt.date == d]
+            if not d_df.empty:
+                has_w = any(
+                    r.get('入力者名') == user or 
+                    (isinstance(r.get('共同作業者'), list) and user in r.get('共同作業者')) or 
+                    (isinstance(r.get('共同作業者'), str) and user in r.get('共同作業者'))
+                    for _, r in d_df.iterrows()
+                )
         
         stat = "✅済" if is_sub else ("📝今日" if d == today else ("⚠️未提出" if has_w else "－"))
         btn_type = "primary" if st.session_state.get('sel_d_date', today) == d else "secondary"
