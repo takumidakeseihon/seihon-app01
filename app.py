@@ -925,7 +925,12 @@ def main_app():
             if cal_sch.empty: 
                 st.info("予定表に「カレンダー」指定の案件がありません。")
             else:
-                p_prod = st.selectbox("親カレンダー", [""] + sorted(cal_sch['品名'].dropna().unique().tolist()))
+                c_names = sorted(cal_sch['得意先名'].dropna().unique().tolist()) if '得意先名' in cal_sch.columns else []
+                sel_c = st.selectbox("得意先名で絞り込み", ["すべての得意先"] + c_names, key="cal_customer_sel")
+                
+                f_cal_sch = cal_sch[cal_sch['得意先名'] == sel_c] if sel_c != "すべての得意先" else cal_sch
+                p_prod = st.selectbox("親カレンダー", [""] + sorted(f_cal_sch['品名'].dropna().unique().tolist()))
+                
                 if p_prod:
                     parent_row = cal_sch[cal_sch['品名']==p_prod].iloc[0]
                     # 予定表と明細CSVから「伝票番号」の列を自動で探す
