@@ -156,6 +156,9 @@ ID_TO_WORKER = {v: k for k, v in WORKER_ID_MAP.items()}
 def load_csv_data(file_path):
     if file_path == SCHEDULE_FILE and 'manual_schedule_df' in st.session_state:
         return st.session_state.manual_schedule_df
+        
+    if file_path == "schedule_m.csv" and 'manual_schedule_m_df' in st.session_state:
+        return st.session_state.manual_schedule_m_df
 
     if file_path == SCHEDULE_FILE and "SCHEDULE_CSV_URL" in st.secrets:
         url = st.secrets["SCHEDULE_CSV_URL"]
@@ -1588,6 +1591,19 @@ def main_app():
                     st.rerun()
             except Exception as e:
                 st.error(f"読み込みエラー: {e}")
+                
+        st.markdown("**■ カレンダー明細の手動アップロード**")
+        uploaded_m_file = st.file_uploader("明細表 (作業予定_m.csv) をアップロード", type=['csv'], label_visibility="collapsed")
+        if uploaded_m_file is not None:
+            try:
+                df_m = pd.read_csv(uploaded_m_file, encoding="utf-8-sig")
+                st.session_state.manual_schedule_m_df = df_m
+                st.success("✅ 手動アップロードされた明細CSVを適用しました！")
+                if st.button("明細を更新して反映する", key="refresh_m_csv", use_container_width=True):
+                    load_csv_data.clear()
+                    st.rerun()
+            except Exception as e:
+                st.error(f"明細読み込みエラー: {e}")
 
         st.divider()
         st.markdown("**■ 日報データの抽出 (CSV)**")
@@ -1632,7 +1648,7 @@ def main_app():
 
     main_view = st.radio(
         "メニューを選択", 
-        ["🔧 通常工程の記録", "📦 名入れ一括登録", "📝 日報（退勤報告）", "👑 管理者画面"], 
+        ["🔧 通常工程の記録", "📅 カレンダー一括管理", "📦 名入れ一括登録", "📝 日報（退勤報告）", "👑 管理者画面"], 
         horizontal=True,
         label_visibility="collapsed"
     )
@@ -1684,7 +1700,6 @@ def main_app():
                 unassigned_mask = display_df['拠点'].isin(['', '未設定', None]) | display_df['拠点'].isna()
                 if unassigned_mask.any():
                     display_df['clean_製品名'] = display_df['製品名'].astype(str).str.strip()
-                    # ★ 防御機能追加: もし「入力者名」が記録されていない古いデータがあってもエラーで落ちないように保護します
                     if '入力者名' in display_df.columns:
                         display_df.loc[unassigned_mask, '拠点'] = display_df.loc[unassigned_mask, '入力者名'].map(WORKER_TO_LOCATION)
                 
@@ -1803,6 +1818,209 @@ def main_app():
             else:
                 st.error("編集対象が指定されていません。")
                 st.session_state.sub_view = 'SELECT_PROCESS'
+
+    elif main_view == "📅 カレンダー一括管理":
+        st.header("📅 カレンダー作業の進捗管理")
+        st.info("作業予定表の「適用」に『カレンダー』と指定されている案件と、その明細(作業予定_m.csv)を紐付けて一括管理します。")
+        
+        schedule_df = load_csv_data(SCHEDULE_FILE)
+        schedule_m_df = load_csv_data("schedule_m.csv")
+        
+        if schedule_df.empty:
+            st.warning("予定表(schedule.csv)が読み込めません。")
+        elif schedule_m_df.empty:
+            st.warning("カレンダー明細(作業予定_m.csv)が読み込めません。左の黒いサイドバーの「🛠️ 管理者メニュー」から明細CSVを手動でアップロードしてください。")
+        else:
+            # 1. schedule.csvからカレンダー案件を抽出
+            if SCHEDULE_COL_DETAILS in schedule_df.columns:
+                cal_schedule_df = schedule_df[schedule_df[SCHEDULE_COL_DETAILS].astype(str).str.contains('カレンダー', na=False)]
+            else:
+                cal_schedule_df = pd.DataFrame()
+                
+            if cal_schedule_df.empty:
+                st.warning(f"予定表の「{SCHEDULE_COL_DETAILS}」列に『カレンダー』と指定されている案件がありません。")
+            else:
+                if '品名' in cal_schedule_df.columns:
+                    parent_products = sorted(cal_schedule_df['品名'].dropna().unique().tolist())
+                    selected_parent_product = st.selectbox("対象の親カレンダー（品名）を選択してください", [""] + parent_products)
+                    
+                    if selected_parent_product:
+                        parent_row = cal_schedule_df[cal_schedule_df['品名'] == selected_parent_product].iloc[0]
+                        parent_customer = parent_row.get('得意先名', '')
+                        parent_denpyo = parent_row.get('伝票番号', '')
+                        
+                        st.write(f"**得意先:** {parent_customer}")
+                        
+                        # 2. schedule_m.csvから明細を抽出 (伝票番号または得意先名で紐付け)
+                        target_m_df = pd.DataFrame()
+                        if '伝票番号' in schedule_df.columns and '伝票番号' in schedule_m_df.columns and pd.notna(parent_denpyo) and str(parent_denpyo).strip() != "":
+                            target_m_df = schedule_m_df[schedule_m_df['伝票番号'] == parent_denpyo]
+                        elif '得意先名' in schedule_m_df.columns and pd.notna(parent_customer) and str(parent_customer).strip() != "":
+                            target_m_df = schedule_m_df[schedule_m_df['得意先名'] == parent_customer]
+                            
+                        if target_m_df.empty:
+                            st.warning("この親案件に対応する明細データ(名入れ先)が見つかりませんでした。")
+                        else:
+                            with st.spinner("作業記録を読み込んでいます..."):
+                                tasks_df = load_tasks_for_customer(db, selected_parent_product)
+                                
+                            st.subheader("工程進捗ボード")
+                            board_processes = ["断裁", "丁合", "綴じ", "梱包", "綴じ+梱包"]
+                            
+                            detail_col = '納品書明細' if '納品書明細' in target_m_df.columns else '内容'
+                            
+                            companies_data = []
+                            for idx, row in target_m_df.iterrows():
+                                c_name = row.get(detail_col, '')
+                                if pd.isna(c_name) or str(c_name).strip() == '':
+                                    c_name = row.get('内容', f'明細行_{idx}')
+                                c_name = str(c_name).strip()
+                                qty = row.get('数量', 0)
+                                companies_data.append({"会社名": c_name, "数量": qty, "id": f"m_{idx}"})
+                                
+                            board_data = []
+                            task_status = {}
+                            
+                            if not tasks_df.empty and "詳細" in tasks_df.columns and "工程名" in tasks_df.columns:
+                                for _, t_row in tasks_df.iterrows():
+                                    comp = str(t_row.get('詳細', '')).strip()
+                                    proc = t_row.get('工程名')
+                                    if comp and proc:
+                                        if comp not in task_status: task_status[comp] = []
+                                        task_status[comp].append(proc)
+                                        
+                            for comp_info in companies_data:
+                                company = comp_info["会社名"]
+                                row_data = {"名入れ先": company, "数量": comp_info["数量"]}
+                                done_procs = task_status.get(company, [])
+                                for process in board_processes:
+                                    if process == "綴じ+梱包":
+                                        is_done = ("綴じ+梱包" in done_procs) or ("綴じ" in done_procs and "梱包" in done_procs)
+                                    else:
+                                        is_done = process in done_procs or ("綴じ+梱包" in done_procs and process in ["綴じ", "梱包"])
+                                    row_data[process] = "✅" if is_done else ""
+                                board_data.append(row_data)
+                                
+                            if board_data:
+                                st.dataframe(pd.DataFrame(board_data).set_index("名入れ先"), use_container_width=True)
+
+                            if 'cal_reset_key' not in st.session_state:
+                                st.session_state.cal_reset_key = 0
+
+                            with st.expander("新しい工程を一括登録・完了する", expanded=True):
+                                st.write("**1. 登録/完了する項目をチェック**")
+                                
+                                checked_items = []
+                                
+                                def get_cal_check_key(idx):
+                                    return f"cal_check_{idx}_{st.session_state.cal_reset_key}"
+
+                                col1_select, col2_select, _ = st.columns([1,1,4])
+                                if col1_select.button("すべて選択", key="cal_select_all"):
+                                    for idx in range(len(companies_data)):
+                                        st.session_state[get_cal_check_key(idx)] = True
+                                    st.rerun()
+                                if col2_select.button("すべて解除", key="cal_deselect_all"):
+                                    for idx in range(len(companies_data)):
+                                        st.session_state[get_cal_check_key(idx)] = False
+                                    st.rerun()
+
+                                for idx, comp_info in enumerate(companies_data):
+                                    company_name = comp_info['会社名']
+                                    quantity_val = int(pd.to_numeric(comp_info['数量'], errors='coerce')) if pd.notna(comp_info['数量']) else 0
+                                    
+                                    done_processes = task_status.get(company_name, [])
+                                    done_badges = " ".join([f"`{p}`" for p in done_processes]) if done_processes else "未着手"
+                                    
+                                    label = f"**{company_name}** | 📦 部数: {quantity_val} | 📝 完了: {done_badges}"
+                                    key = get_cal_check_key(idx)
+                                    
+                                    if st.checkbox(label, key=key):
+                                        checked_items.append(comp_info)
+                                        
+                                st.divider()
+                                st.write("**2. 登録する工程内容**")
+                                cal_process_name = st.selectbox("工程名", ["", "断裁", "丁合", "綴じ", "梱包", "綴じ+梱包"], key="cal_bulk_process")
+                                
+                                with st.form("cal_bulk_form"):
+                                    current_process = st.session_state.get("cal_bulk_process", "")
+                                    if current_process == '断裁':
+                                        work_time_input = st.selectbox("（チェックした全体の）合計作業時間（分）", [str(i * 10) for i in range(1, 73)])
+                                    elif not current_process:
+                                        st.info("まず上のメニューから工程を選択してください。")
+                                    else:
+                                        start_time_input = st.time_input("開始時間", step=600, value=time(9, 0))
+                                        end_time_input = st.time_input("終了時間", step=600, value=time(10, 0))
+                                    workers = st.number_input("作業人数", min_value=0.5, value=1.0, step=0.5, format="%.1f")
+                                    
+                                    st.divider()
+                                    st.write("**3. 実行**")
+                                    col1, col2 = st.columns(2)
+                                    is_process_selected = current_process != ""
+                                    register_submitted = col1.form_submit_button("チェックした項目をまとめて登録", use_container_width=True, disabled=not is_process_selected)
+                                    complete_submitted = col2.form_submit_button("チェックした項目の全作業を完了にする", type="primary", use_container_width=True)
+                                    
+                                    if register_submitted:
+                                        if not checked_items: st.warning("登録する項目がチェックされていません。"); st.stop()
+                                        checked_count = len(checked_items)
+                                        
+                                        total_work_time, start_time_str, end_time_str = 0, "", ""
+                                        if current_process == '断裁':
+                                            total_work_time = int(work_time_input)
+                                        else:
+                                            if not (start_time_input and end_time_input and end_time_input > start_time_input):
+                                                st.error("終了時間は開始時間より後にしてください。"); st.stop()
+                                            delta = datetime.combine(datetime.today(), end_time_input) - datetime.combine(datetime.today(), start_time_input)
+                                            total_work_time = delta.total_seconds() / 60
+                                            start_time_str, end_time_str = start_time_input.strftime('%H:%M'), end_time_input.strftime('%H:%M')
+                                        
+                                        work_time_per_item = round(total_work_time / checked_count, 1)
+                                        batch = db.batch()
+                                        for item in checked_items:
+                                            new_record_data = {
+                                                "入力者名": st.session_state.logged_in_user,
+                                                "拠点": st.session_state.get('user_location', "未設定"),
+                                                "記録ID": datetime.now().strftime("%Y%m%d%H%M%S%f") + f"_{item['id']}", 
+                                                "製品名": selected_parent_product, "工程名": current_process, "詳細": item['会社名'], 
+                                                "開始時間": start_time_str, "終了時間": end_time_str, "作業時間_分": work_time_per_item,
+                                                "出来数": int(item['数量']) if pd.notna(item['数量']) else 0, "作業人数": float(workers), 
+                                                "ステータス": "作業中", "備考": "", "作成日時": firestore.SERVER_TIMESTAMP
+                                            }
+                                            batch.set(db.collection("in_progress").document(), new_record_data)
+                                        batch.commit()
+                                        
+                                        st.session_state.cal_reset_key += 1
+                                        st.session_state.success_msg = f"{len(checked_items)}件の記録を登録しました。"
+                                        st.rerun()
+                                        
+                                    if complete_submitted:
+                                        if not checked_items: st.warning("完了にする項目がチェックされていません。"); st.stop()
+                                        batch = db.batch()
+                                        
+                                        company_names_to_complete = [item['会社名'] for item in checked_items]
+                                        in_progress_df = st.session_state.get('in_progress_df', pd.DataFrame())
+                                        
+                                        if not in_progress_df.empty:
+                                            docs_to_move = in_progress_df[
+                                                (in_progress_df["製品名"] == selected_parent_product) &
+                                                (in_progress_df["詳細"].isin(company_names_to_complete))
+                                            ]
+                                            
+                                            for index, row in docs_to_move.iterrows():
+                                                doc_data = row.to_dict(); doc_data['ステータス'] = '完了'
+                                                doc_data['完了日時'] = firestore.SERVER_TIMESTAMP
+                                                if '拠点' not in doc_data or pd.isna(doc_data.get('拠点')) or doc_data.get('拠点') == '未設定':
+                                                    doc_data['拠点'] = st.session_state.get('user_location', "未設定")
+                                                batch.set(db.collection("completed").document(), doc_data)
+                                                batch.delete(db.collection("in_progress").document(row['id']))
+                                                
+                                        batch.commit()
+                                        load_from_firestore.clear()
+                                        load_tasks_for_customer.clear()
+                                        
+                                        st.session_state.cal_reset_key += 1
+                                        st.session_state.success_msg = f"{len(checked_items)}件の作業を完了にしました。"
+                                        st.rerun()
 
     elif main_view == "📦 名入れ一括登録":
         st.header("名入れ工程の進捗管理")
