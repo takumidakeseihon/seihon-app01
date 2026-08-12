@@ -436,7 +436,11 @@ def show_daily_report():
     if t_tasks.empty: st.info("この日の作業記録はありません。")
     else:
         for _, r in t_tasks.iterrows():
-            wt = int(r.get('作業時間_分',0))
+            try:
+                wt_raw = r.get('作業時間_分', 0)
+                wt = int(float(wt_raw)) if pd.notna(wt_raw) and str(wt_raw).strip() != "" else 0
+            except:
+                wt = 0
             w_str = f"{wt//60}時間{wt%60}分" if wt>0 else ""
             st.markdown(f"- `{r.get('開始時間','')}~ {w_str}` **{r.get('製品名','')}** > {r.get('工程名','')} [{r.get('使用機械','')}] ({r.get('出来数',0)}個) / {r.get('詳細','')}")
 
@@ -656,7 +660,12 @@ def show_admin_dashboard():
                                 helper_badge = "👑機長"
                                 
                             start_t = t_row.get('開始時間', '')
-                            work_m = int(t_row.get('作業時間_分', 0))
+                            try:
+                                work_m_raw = t_row.get('作業時間_分', 0)
+                                work_m = int(float(work_m_raw)) if pd.notna(work_m_raw) and str(work_m_raw).strip() != "" else 0
+                            except:
+                                work_m = 0
+                            
                             if work_m > 0:
                                 h = work_m // 60
                                 m = work_m % 60
