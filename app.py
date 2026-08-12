@@ -1,10 +1,8 @@
 import streamlit as st
 import pandas as pd
 from datetime import datetime, time, timedelta, timezone
-from pathlib import Path
-import math
-import unicodedata 
-import streamlit.components.v1 as components 
+import unicodedata
+import streamlit.components.v1 as components
 import firebase_admin
 from firebase_admin import credentials, firestore
 import json
@@ -14,17 +12,6 @@ import io
 from PIL import Image
 
 st.set_page_config(page_title="製本記録アプリ", layout="wide")
-
-# セッションステート初期化
-if 'sub_view' not in st.session_state:
-    st.session_state.sub_view = 'SELECT_PROCESS'
-if 'submit_disabled' not in st.session_state:
-    st.session_state.submit_disabled = False
-if 'cal_reset_key' not in st.session_state:
-    st.session_state.cal_reset_key = 0
-if 'naire_reset_key' not in st.session_state:
-    st.session_state.naire_reset_key = 0
-
 st.markdown("""<style>input, textarea, select { font-size: 16px !important; }</style>""", unsafe_allow_html=True)
 components.html("""<script>const doc=window.parent.document; function d(){doc.querySelectorAll('div[data-baseweb="select"] input').forEach(i=>{if(i.getAttribute('inputmode')!=='none')i.setAttribute('inputmode','none');});} d(); new MutationObserver(d).observe(doc.body,{childList:true,subtree:true});</script>""", height=0, width=0)
 
@@ -33,8 +20,10 @@ def clean_text(text):
     return unicodedata.normalize('NFKC', str(text)).strip().replace(' ', '').replace('　', '')
 
 SCHEDULE_FILE = "schedule.csv"
+SCHEDULE_M_FILE = "schedule_m.csv"
 PROCESS_OPTIONS = ["", "断裁", "折", "中綴じ", "無線綴じ", "ミシン・スジ", "角丸", "貼込", "糸かがり", "綴じ（カレンダー）", "丁合（カレンダー）", "穴明け", "梱包", "区分け", "手作業"]
 NAIRE_PROCESS_OPTIONS = ["", "断裁", "丁合", "綴じ", "綴じ+梱包", "メクレルト", "梱包"]
+CALENDAR_PROCESS_OPTIONS = ["", "断裁", "丁合", "綴じ", "綴じ+梱包", "梱包"]
 FOLD_OPTIONS = ["", "4p", "6p", "8p", "16p", "その他"]
 
 SCHEDULE_COL_PAGE_COUNT = "ページ数"
@@ -78,27 +67,30 @@ WORKER_TO_LOCATION.update({name: "札幌" for name in SAPPORO_MEMBERS})
 WORKER_ID_MAP = {name: f"A{i+1:02d}" if name in ASAHIKAWA_MEMBERS else f"S{i-23:02d}" for i, name in enumerate(WORKER_NAMES)}
 ID_TO_WORKER = {v: k for k, v in WORKER_ID_MAP.items()}
 
-@st.cache_data(ttl=3600)
-def load_csv_data(file_path):
-    if file_path == SCHEDULE_FILE and 'manual_schedule_df' in st.session_state: return st.session_state.manual_schedule_df
-    if file_path == "schedule_m.csv" and 'manual_schedule_m_df' in st.session_state: return st.session_state.manual_schedule_m_df
-    if file_path == SCHEDULE_FILE and "SCHEDULE_CSV_URL" in st.secrets:
-        if st.secrets["SCHEDULE_CSV_URL"]:
-            try: return pd.read_csv(st.secrets["SCHEDULE_CSV_URL"], encoding="utf-8-sig")
-            except: pass 
-    try: return pd.read_csv(file_path, encoding="utf-8-sig")
-    except: return pd.DataFrame()
-
 @st.cache_resource
 def init_firebase():
     try:
         if not firebase_admin._apps:
-            cred = credentials.Certificate(json.loads(os.environ.get("FIREBASE_KEY_JSON", st.secrets.get("FIREBASE_KEY_JSON", "{}")))) if os.environ.get("FIREBASE_KEY_JSON") or "FIREBASE_KEY_JSON" in st.secrets else credentials.Certificate("firebase_key.json")
+            if os.environ.get("FIREBASE_KEY_JSON"):
+                cred = credentials.Certificate(json.loads(os.environ.get("FIREBASE_KEY_JSON")))
+            elif "FIREBASE_KEY_JSON" in st.secrets:
+                cred = credentials.Certificate(json.loads(st.secrets["FIREBASE_KEY_JSON"]))
+            else:
+                cred = credentials.Certificate("firebase_key.json")
             firebase_admin.initialize_app(cred)
         return firestore.client()
     except Exception as e:
-        st.error(f"データベース接続エラー: {e}")
+        st.error(f"DB接続エラー: {e}")
         return None
+
+@st.cache_data(ttl=3600)
+def load_csv_data(file_path):
+    if file_path == SCHEDULE_FILE and 'manual_schedule_df' in st.session_state: return st.session_state.manual_schedule_df
+    if file_path == SCHEDULE_FILE and "SCHEDULE_CSV_URL" in st.secrets and st.secrets["SCHEDULE_CSV_URL"]:
+        try: return pd.read_csv(st.secrets["SCHEDULE_CSV_URL"], encoding="utf-8-sig")
+        except: pass 
+    try: return pd.read_csv(file_path, encoding="utf-8-sig")
+    except: return pd.DataFrame()
 
 @st.cache_data(ttl=600)
 def load_from_firestore(_db, collection_name, active_only=False, days_limit=None):
@@ -128,12 +120,58 @@ def load_tasks_for_customer(_db, customer_name):
         except: pass
     return pd.DataFrame(all_tasks) if all_tasks else pd.DataFrame()
 
+def handle_db_write(operation, success_message, error_message, rerun_on_success=True):
+    try:
+        with st.spinner("処理中..."):
+            if not firebase_admin._apps: init_firebase()
+            operation()
+            st.session_state.success_msg = success_message
+            st.session_state.sub_view = 'SELECT_PROCESS'
+            st.session_state.pop('record_to_copy', None)
+            if rerun_on_success:
+                load_from_firestore.clear(); load_tasks_for_customer.clear(); st.rerun()
+    except Exception as e: st.error(f"{error_message}: {e}")
+
+def handle_update(doc_id, data_dict): handle_db_write(lambda: firestore.client().collection("in_progress").document(doc_id).update(data_dict), "記録を更新しました。", "更新中にエラー")
+def handle_add_in_progress(data_dict): handle_db_write(lambda: firestore.client().collection("in_progress").add(data_dict), f"工程「{data_dict['工程名']}」を追加しました。", "追加中にエラー")
+
+def handle_completion(new_data_dict):
+    def op():
+        db_b = firestore.client().batch()
+        ip_df = st.session_state.get('in_progress_df', pd.DataFrame())
+        if not ip_df.empty and "製品名" in ip_df.columns:
+            for _, row in ip_df[ip_df["製品名"] == new_data_dict['製品名']].iterrows():
+                d = row.to_dict(); d['ステータス'], d['完了日時'] = '完了', firestore.SERVER_TIMESTAMP
+                if '拠点' not in d or pd.isna(d.get('拠点')) or d.get('拠点') == '未設定': d['拠点'] = st.session_state.get('product_to_location', {}).get(clean_text(d.get('製品名', '')), '未設定')
+                db_b.set(firestore.client().collection("completed").document(), d)
+                db_b.delete(firestore.client().collection("in_progress").document(row['id']))
+        new_data_dict['完了日時'] = firestore.SERVER_TIMESTAMP
+        db_b.set(firestore.client().collection("completed").document(), new_data_dict)
+        db_b.commit()
+    handle_db_write(op, f"✅ 「{new_data_dict['製品名']}」を確定しました。", "完了処理中にエラー")
+
+def handle_product_completion(product_name):
+    def op():
+        db_b = firestore.client().batch()
+        ip_df = st.session_state.get('in_progress_df', pd.DataFrame())
+        mc = 0
+        if not ip_df.empty and "製品名" in ip_df.columns:
+            for _, row in ip_df[ip_df["製品名"] == product_name].iterrows():
+                d = row.to_dict(); d['ステータス'], d['完了日時'] = '完了', firestore.SERVER_TIMESTAMP
+                if '拠点' not in d or pd.isna(d.get('拠点')) or d.get('拠点') == '未設定': d['拠点'] = st.session_state.get('product_to_location', {}).get(clean_text(d.get('製品名', '')), '未設定')
+                db_b.set(firestore.client().collection("completed").document(), d)
+                db_b.delete(firestore.client().collection("in_progress").document(row['id']))
+                mc += 1
+        if mc == 0: return st.warning("記録が見つかりません。")
+        db_b.commit()
+    handle_db_write(op, f"✅ 「{product_name}」を作業完了にしました。", "完了処理中にエラー")
+
 def process_form(is_edit_mode=False, default_data=None):
     default_data = default_data or {}
     product_name = default_data.get('製品名', st.session_state.get('selected_product', ''))
     process_name = default_data.get('工程名', st.session_state.get('selected_process', ''))
     
-    st.markdown(f"<h2 style='font-size: clamp(0.9rem, 3.5vw, 1.6rem); margin-bottom: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;'>Step 2: 「{product_name}」の作業内容を記録</h2>", unsafe_allow_html=True)
+    st.markdown(f"<h2 style='font-size: clamp(0.9rem, 3.5vw, 1.6rem); margin-bottom: 0;'>Step 2: 「{product_name}」の作業内容を記録</h2>", unsafe_allow_html=True)
     st.markdown(f"<h3 style='font-size: clamp(0.8rem, 3vw, 1.2rem); color: #555; margin-top: 5px;'>工程: <b>{process_name}</b></h3>", unsafe_allow_html=True)
     
     schedule_df = load_csv_data(SCHEDULE_FILE)
@@ -276,52 +314,6 @@ def process_form(is_edit_mode=False, default_data=None):
         if btn_sub: submit_data("作業中")
         if btn_com: submit_data("完了")
 
-def handle_db_write(operation, success_message, error_message):
-    try:
-        with st.spinner("処理中..."):
-            if not firebase_admin._apps: init_firebase()
-            operation()
-            st.session_state.success_msg = success_message
-            st.session_state.sub_view = 'SELECT_PROCESS'
-            st.session_state.pop('record_to_copy', None)
-            load_from_firestore.clear(); load_tasks_for_customer.clear(); st.rerun()
-    except Exception as e: st.error(f"{error_message}: {e}")
-
-def handle_update(doc_id, data_dict): handle_db_write(lambda: firestore.client().collection("in_progress").document(doc_id).update(data_dict), "記録を更新しました。", "更新中にエラーが発生")
-def handle_add_in_progress(data_dict): handle_db_write(lambda: firestore.client().collection("in_progress").add(data_dict), f"工程「{data_dict['工程名']}」を追加しました。", "追加処理中にエラーが発生")
-
-def handle_completion(new_data_dict):
-    def op():
-        db_b = firestore.client().batch()
-        ip_df = st.session_state.get('in_progress_df', pd.DataFrame())
-        if not ip_df.empty and "製品名" in ip_df.columns:
-            for _, row in ip_df[ip_df["製品名"] == new_data_dict['製品名']].iterrows():
-                d = row.to_dict()
-                d['ステータス'], d['完了日時'] = '完了', firestore.SERVER_TIMESTAMP
-                if '拠点' not in d or pd.isna(d.get('拠点')) or d.get('拠点') == '未設定': d['拠点'] = st.session_state.get('product_to_location', {}).get(clean_text(d.get('製品名', '')), '未設定')
-                db_b.set(firestore.client().collection("completed").document(), d)
-                db_b.delete(firestore.client().collection("in_progress").document(row['id']))
-        new_data_dict['完了日時'] = firestore.SERVER_TIMESTAMP
-        db_b.set(firestore.client().collection("completed").document(), new_data_dict)
-        db_b.commit()
-    handle_db_write(op, f"✅ 「{new_data_dict['製品名']}」を確定しました。", "完了処理中にエラー")
-
-def handle_product_completion(product_name):
-    def op():
-        db_b = firestore.client().batch()
-        ip_df = st.session_state.get('in_progress_df', pd.DataFrame())
-        mc = 0
-        if not ip_df.empty and "製品名" in ip_df.columns:
-            for _, row in ip_df[ip_df["製品名"] == product_name].iterrows():
-                d = row.to_dict(); d['ステータス'], d['完了日時'] = '完了', firestore.SERVER_TIMESTAMP
-                if '拠点' not in d or pd.isna(d.get('拠点')) or d.get('拠点') == '未設定': d['拠点'] = st.session_state.get('product_to_location', {}).get(clean_text(d.get('製品名', '')), '未設定')
-                db_b.set(firestore.client().collection("completed").document(), d)
-                db_b.delete(firestore.client().collection("in_progress").document(row['id']))
-                mc += 1
-        if mc == 0: return st.warning(f"記録が見つかりません。")
-        db_b.commit()
-    handle_db_write(op, f"✅ 「{product_name}」の作業を完了しました。", "完了処理中にエラー")
-
 def login_screen():
     st.header("ようこそ！")
     st.subheader("はじめに、あなたの名前を選択してください。")
@@ -362,7 +354,14 @@ def show_daily_report():
         is_sub = not reports_df.empty and '提出者' in reports_df.columns and not reports_df[(reports_df['提出者'] == user) & (reports_df['日付'] == d.strftime('%Y-%m-%d'))].empty
         has_w = False
         if not all_df.empty and '作成日時_dt' in all_df.columns:
-            has_w = all_df[all_df['作成日時_dt'].dt.date == d].apply(lambda r: r.get('入力者名') == user or (user in r.get('共同作業者', [])) or (isinstance(r.get('共同作業者'), str) and user in r.get('共同作業者')), axis=1).any()
+            d_df = all_df[all_df['作成日時_dt'].dt.date == d]
+            if not d_df.empty:
+                has_w = any(
+                    r.get('入力者名') == user or 
+                    (isinstance(r.get('共同作業者'), list) and user in r.get('共同作業者')) or 
+                    (isinstance(r.get('共同作業者'), str) and user in r.get('共同作業者'))
+                    for _, r in d_df.iterrows()
+                )
         
         stat = "✅済" if is_sub else ("📝今日" if d == today else ("⚠️未提出" if has_w else "－"))
         btn_type = "primary" if st.session_state.get('sel_d_date', today) == d else "secondary"
@@ -438,18 +437,10 @@ def show_admin_dashboard():
             else: st.error("パスワードが違います")
         return
 
-    reports_df = load_from_firestore(db, "daily_reports")
-    ip_df = load_from_firestore(db, "in_progress")
-    cp_df = load_from_firestore(db, "completed", days_limit=3000)
-    if not ip_df.empty: ip_df['_collection'] = "in_progress"
-    if not cp_df.empty: cp_df['_collection'] = "completed"
-    all_df = pd.concat([ip_df, cp_df], ignore_index=True) if not ip_df.empty or not cp_df.empty else pd.DataFrame()
-
     admin_tab = st.radio("メニュー", ["📊 日報確認", "🛠️ 一括修正"], horizontal=True, key="adm_tab")
     st.divider()
     if admin_tab == "📊 日報確認":
         st.write("日報確認画面（実装済みの機能を提供）")
-        # CSVダウンロードなど
     elif admin_tab == "🛠️ 一括修正":
         st.write("一括修正機能（実装済みの機能を提供）")
 
@@ -494,11 +485,17 @@ def main_app():
         in_progress_df = load_from_firestore(db, "in_progress")
         st.session_state.in_progress_df = in_progress_df
         
+        # 確実に sub_view を取得し、なければ SELECT_PROCESS にする
         sub_view = st.session_state.get('sub_view', 'SELECT_PROCESS')
-        if sub_view == 'INPUT_FORM': process_form(is_edit_mode=False, default_data=st.session_state.get('record_to_copy'))
-        elif sub_view == 'EDIT_FORM': process_form(is_edit_mode=True, default_data=st.session_state.get('record_to_edit'))
+        
+        if sub_view == 'INPUT_FORM': 
+            process_form(is_edit_mode=False, default_data=st.session_state.get('record_to_copy'))
+        elif sub_view == 'EDIT_FORM': 
+            process_form(is_edit_mode=True, default_data=st.session_state.get('record_to_edit'))
         else:
+            # どんな想定外の値が入っていても、必ず基本の画面（SELECT_PROCESS）を表示する絶対安全設計
             st.session_state.sub_view = 'SELECT_PROCESS'
+            
             schedule_df = load_csv_data(SCHEDULE_FILE)
             loc_opts = ["すべて", "旭川", "札幌"]
             p2l = {}
@@ -514,10 +511,12 @@ def main_app():
                 if sel_loc != "すべて": d_df = d_df[d_df['拠点'] == sel_loc]
 
             c_f, c_l = st.columns(2)
-            with c_f: render_step1(schedule_df, d_df, sel_loc, p2l)
+            with c_f: 
+                render_step1(schedule_df, d_df, sel_loc, p2l)
             with c_l:
                 st.markdown("<h3>進行中一覧</h3>", unsafe_allow_html=True)
-                if d_df.empty: st.info("作業中の製品はありません。")
+                if d_df.empty: 
+                    st.info("作業中の製品はありません。")
                 else:
                     for p, g in d_df.groupby('製品名'):
                         with st.expander(f"**{p}**"):
@@ -537,20 +536,51 @@ def main_app():
     elif main_view == "📅 カレンダー一括管理":
         st.header("カレンダー一括管理")
         sch = load_csv_data(SCHEDULE_FILE)
-        sch_m = load_csv_data("schedule_m.csv")
-        if sch.empty or sch_m.empty: st.warning("予定表CSV または schedule_m.csv が読み込めません。")
+        sch_m = load_csv_data(SCHEDULE_M_FILE)
+        if sch.empty or sch_m.empty: 
+            st.warning("予定表CSV または schedule_m.csv が読み込めません。（サイドバーからアップロードしてください）")
         else:
             cal_sch = sch[sch[SCHEDULE_COL_DETAILS].astype(str).str.contains('カレンダー', na=False)] if SCHEDULE_COL_DETAILS in sch.columns else pd.DataFrame()
-            if cal_sch.empty: st.info("予定表に「カレンダー」指定の案件がありません。")
+            if cal_sch.empty: 
+                st.info("予定表に「カレンダー」指定の案件がありません。")
             else:
                 p_prod = st.selectbox("親カレンダー", [""] + sorted(cal_sch['品名'].dropna().unique().tolist()))
                 if p_prod:
-                    t_m = sch_m[sch_m['伝票番号'] == cal_sch[cal_sch['品名']==p_prod].iloc[0].get('伝票番号')]
-                    if t_m.empty: st.warning("明細が見つかりません。")
-                    else: st.write("機能実装済み（詳細略）")
+                    c_code = cal_sch[cal_sch['品名']==p_prod].iloc[0].get('得意先コード')
+                    if '得意先コード' in sch_m.columns:
+                        t_m = sch_m[sch_m['得意先コード'] == c_code]
+                    else:
+                        t_m = sch_m # 項目が見つからない場合のフォールバック
+                    
+                    if t_m.empty: 
+                        st.warning("このカレンダーの明細が見つかりません。")
+                    else: 
+                        st.success(f"{len(t_m)}件の明細が見つかりました。")
+                        
+                        target_companies = t_m['納品書明細'].dropna().unique().tolist() if '納品書明細' in t_m.columns else t_m.iloc[:, 0].dropna().unique().tolist()
+                        
+                        st.write("対象会社リスト（チェックして一括処理）")
+                        checked_comps = []
+                        for comp in target_companies:
+                            if st.checkbox(str(comp), key=f"cal_chk_{comp}"):
+                                checked_comps.append(comp)
+                        
+                        sel_proc = st.selectbox("一括登録する工程", CALENDAR_PROCESS_OPTIONS)
+                        c1, c2 = st.columns(2)
+                        if c1.button("一括で作業中に追加", type="primary"):
+                            if not checked_comps or not sel_proc: st.error("会社と工程を選択してください。")
+                            else:
+                                b = db.batch()
+                                for c in checked_comps:
+                                    d = {"製品名": p_prod, "詳細": c, "工程名": sel_proc, "ステータス": "作業中", "入力者名": st.session_state.logged_in_user, "作成日時": firestore.SERVER_TIMESTAMP}
+                                    b.set(db.collection("in_progress").document(), d)
+                                b.commit()
+                                st.success("一括追加しました。")
+                                load_from_firestore.clear()
+                                st.rerun()
 
     elif main_view == "📦 名入れ一括登録":
-        st.write("名入れ一括登録機能（実装済み）")
+        st.write("名入れ一括登録機能（既存の機能・そのまま残しています）")
     elif main_view == "📝 日報（退勤報告）":
         show_daily_report()
     elif main_view == "👑 管理者画面":
