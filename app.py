@@ -117,6 +117,12 @@ def load_tasks_for_customer(_db, customer_name):
                 df = pd.DataFrame(records)
                 if "製品名" in df.columns:
                     f_df = df[df["製品名"] == customer_name]
+                    if not f_df.empty:
+                        all_tasks.append(f_df)
+        except Exception:
+            pass
+    return pd.concat(all_tasks, ignore_index=True) if all_tasks else pd.DataFrame()
+
 def handle_db_write(operation, success_message, error_message, rerun_on_success=True, view_key='sub_view'):
     try:
         with st.spinner("処理中..."):
