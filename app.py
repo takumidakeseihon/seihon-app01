@@ -665,6 +665,7 @@ def show_daily_report():
     st.markdown("<h2 style='font-size: clamp(1.2rem, 5vw, 2rem); margin-bottom: 1rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;' title='📝 日報（退勤報告）'>📝 日報（退勤報告）</h2>", unsafe_allow_html=True)
     
     user = st.session_state.logged_in_user
+    today = datetime.now(timezone(timedelta(hours=9))).date()
     
     col1, col2 = st.columns([6, 4])
     with col1:
@@ -674,16 +675,39 @@ def show_daily_report():
             load_from_firestore.clear()
             load_tasks_for_customer.clear()
             st.rerun()
+
+    if 'selected_daily_date' not in st.session_state:
+        st.session_state.selected_daily_date = today
     
-    with st.spinner("提出状況を確認しています..."):
+    with st.spinner("提出状況と作業記録を確認しています..."):
         reports_df = load_from_firestore(db, "daily_reports")
         
-    today = datetime.now(timezone(timedelta(hours=9))).date()
+        my_tasks_last_7_days = pd.DataFrame()
+        in_prog_df = load_from_firestore(db, "in_progress")
+        comp_df = load_from_firestore(db, "completed", days_limit=1000)
+        
+        if not in_prog_df.empty: in_prog_df['_collection'] = "in_progress"
+        if not comp_df.empty: comp_df['_collection'] = "completed"
+        all_tasks_df = pd.concat([in_prog_df, comp_df], ignore_index=True) if not in_prog_df.empty or not comp_df.empty else pd.DataFrame()
+        
+        if not all_tasks_df.empty and '作成日時' in all_tasks_df.columns:
+            all_tasks_df['作成日時_dt'] = pd.to_datetime(all_tasks_df['作成日時'], utc=True).dt.tz_convert('Asia/Tokyo')
+            mask = all_tasks_df['作成日時_dt'].dt.date >= (today - timedelta(days=6))
+            recent_tasks = all_tasks_df[mask]
+            
+            def is_involved(row):
+                if row.get('入力者名') == user: return True
+                co_workers = row.get('共同作業者', [])
+                if isinstance(co_workers, list) and user in co_workers: return True
+                if isinstance(co_workers, str) and user in co_workers: return True
+                return False
+            
+            if not recent_tasks.empty:
+                my_tasks_last_7_days = recent_tasks[recent_tasks.apply(is_involved, axis=1)]
     
-    st.markdown("<h5 style='font-size: clamp(0.9rem, 3.5vw, 1.1rem); margin-bottom: 10px;'>📅 直近1週間の提出状況</h5>", unsafe_allow_html=True)
+    st.markdown("<h5 style='font-size: clamp(0.9rem, 3.5vw, 1.1rem); margin-bottom: 10px;'>📅 直近1週間の状況（タップで日付移動）</h5>", unsafe_allow_html=True)
     
-    html_blocks = ['<div style="display: flex; justify-content: space-between; gap: 4px; margin-bottom: 20px;">']
-    
+    cols = st.columns(7)
     for i in range(7):
         d = today - timedelta(days=6-i)
         d_str = d.strftime('%Y-%m-%d')
@@ -694,36 +718,47 @@ def show_daily_report():
         if not reports_df.empty and '提出者' in reports_df.columns and '日付' in reports_df.columns:
             if not reports_df[(reports_df['提出者'] == user) & (reports_df['日付'] == d_str)].empty:
                 is_submitted = True
-                
-        if is_submitted:
-            bg_color, text_color, border_color = "#d1fae5", "#065f46", "#34d399"
-            status_text = "✅済"
-        elif d == today:
-            bg_color, text_color, border_color = "#fef3c7", "#92400e", "#fbbf24"
-            status_text = "📝今日"
-        else:
-            bg_color, text_color, border_color = "#f3f4f6", "#6b7280", "#e5e7eb"
-            status_text = "－"
-            
-        date_weight = "bold" if d == today else "normal"
-        date_color = "#333" if d == today else "#666"
-            
-        block = f'''<div style="flex: 1; text-align: center; font-size: clamp(0.6rem, 2.5vw, 0.85rem);">
-<div style="color: {date_color}; font-weight: {date_weight}; margin-bottom: 4px; line-height: 1.2;">{disp_date}<br>({day_label})</div>
-<div style="background-color: {bg_color}; color: {text_color}; padding: 4px 0; border-radius: 6px; border: 1px solid {border_color}; font-weight: bold; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;" title="{status_text}">{status_text}</div>
-</div>'''
-        html_blocks.append(block)
         
-    html_blocks.append('</div>')
-    st.markdown("".join(html_blocks), unsafe_allow_html=True)
+        has_work = False
+        if not my_tasks_last_7_days.empty:
+            has_work = not my_tasks_last_7_days[my_tasks_last_7_days['作成日時_dt'].dt.date == d].empty
+
+        is_selected = st.session_state.selected_daily_date == d
+        
+        if is_submitted:
+            status_text = "✅済"
+            btn_type = "primary" if is_selected else "secondary"
+        elif d == today:
+            status_text = "📝今日"
+            btn_type = "primary" if is_selected else "secondary"
+        elif has_work:
+            status_text = "⚠️未提出"
+            btn_type = "primary" if is_selected else "secondary"
+        else:
+            status_text = "－"
+            btn_type = "primary" if is_selected else "secondary"
+
+        with cols[i]:
+            if status_text == "⚠️未提出" and not is_selected:
+                st.markdown(f"""
+                <div style="background-color: #fee2e2; border: 1px solid #ef4444; border-radius: 5px; text-align: center; padding: 5px 0; cursor: pointer;" onclick="document.getElementById('hidden_btn_{i}').click();">
+                    <span style="font-size: 0.8rem; color: #991b1b;">{disp_date}</span><br>
+                    <span style="font-size: 0.8rem; font-weight: bold; color: #991b1b;">⚠️未提出</span>
+                </div>
+                """, unsafe_allow_html=True)
+                if st.button(" ", key=f"hidden_btn_{i}", help="タップして移動"):
+                    st.session_state.selected_daily_date = d
+                    st.rerun()
+            else:
+                if st.button(f"{disp_date}\n{status_text}", key=f"date_btn_{i}", use_container_width=True, type=btn_type):
+                    st.session_state.selected_daily_date = d
+                    st.rerun()
                 
     st.divider()
     
-    target_date = st.date_input(
-        "📅 提出（または確認）する対象日を選択してください",
-        value=today
-    )
+    target_date = st.session_state.selected_daily_date
     target_date_str = target_date.strftime('%Y-%m-%d')
+    st.markdown(f"#### 📅 選択中の日付: {target_date.strftime('%Y年%m月%d日')}")
 
     is_target_submitted = False
     submitted_report = None
@@ -753,29 +788,13 @@ def show_daily_report():
             if submitted_report.get('写真データ'):
                 st.write("- **添付写真:** あり（データベースに保存されています）")
 
-    with st.spinner(f"{target_date.strftime('%Y年%m月%d日')} の作業履歴をまとめています..."):
-        in_prog_df = load_from_firestore(db, "in_progress")
-        comp_df = load_from_firestore(db, "completed", days_limit=3000)
-        
-        if not in_prog_df.empty:
-            in_prog_df['_collection'] = "in_progress"
-        if not comp_df.empty:
-            comp_df['_collection'] = "completed"
-            
-        if not in_prog_df.empty or not comp_df.empty:
-            all_df = pd.concat([in_prog_df, comp_df], ignore_index=True)
-        else:
-            all_df = pd.DataFrame()
-        
     today_tasks = pd.DataFrame()
     other_tasks = pd.DataFrame()
     
-    if not all_df.empty and '作成日時' in all_df.columns:
-        all_df['作成日時_dt'] = pd.to_datetime(all_df['作成日時'], utc=True).dt.tz_convert('Asia/Tokyo')
+    if not all_tasks_df.empty and '作成日時_dt' in all_tasks_df.columns:
+        today_df = all_tasks_df[all_tasks_df['作成日時_dt'].dt.date == target_date]
         
-        today_df = all_df[all_df['作成日時_dt'].dt.date == target_date]
-        
-        def is_involved(row):
+        def is_involved_today(row):
             if row.get('入力者名') == user: return True
             co_workers = row.get('共同作業者', [])
             if isinstance(co_workers, list) and user in co_workers: return True
@@ -783,7 +802,7 @@ def show_daily_report():
             return False
             
         if not today_df.empty:
-            involved_mask = today_df.apply(is_involved, axis=1)
+            involved_mask = today_df.apply(is_involved_today, axis=1)
             today_tasks = today_df[involved_mask].sort_values('作成日時_dt')
             other_tasks = today_df[~involved_mask].sort_values('作成日時_dt')
             
@@ -808,11 +827,9 @@ def show_daily_report():
             process = row.get('工程名', '工程不明')
             detail = row.get('詳細', '')
             qty = int(row.get('出来数', 0))
-            status = row.get('ステータス', '')
             is_helper = row.get('入力者名') != user
             
             machine = row.get('使用機械', '')
-            rotation = int(row.get('回転数', 0)) if pd.notna(row.get('回転数', 0)) else 0
             
             qty_str = f"{qty:,}個"
             setup_badge = " 🔧セットのみ" if qty == 0 else ""
@@ -851,7 +868,6 @@ def show_daily_report():
                 qty = int(row.get('出来数', 0))
                 
                 qty_str = f"{qty:,}個"
-                
                 setup_badge = "🔧セット" if qty == 0 else "" 
                 machine_str = f"[{machine}]" if machine else ""
                 
@@ -866,9 +882,7 @@ def show_daily_report():
                     time_str = f"{start_t}~" if start_t else "時間なし"
                 
                 worker_short = worker.split(" ")[0].split("　")[0] 
-                
                 label = f"【{product}】{process} ({worker_short}) | {time_str} | {machine_str}{setup_badge} {qty_str}"
-                
                 task_options[label] = row
                 
             selected_task_label = st.selectbox("手伝った作業を選んでください", ["（ここから作業を選択）"] + list(task_options.keys()))
@@ -1018,6 +1032,25 @@ def show_daily_report():
                 st.rerun()
             except Exception as e:
                 st.error(f"日報の送信に失敗しました: {e}")
+
+    # 過去の履歴表示
+    st.divider()
+    st.markdown("### 📂 過去の日報履歴")
+    with st.expander("あなたの過去の提出履歴（最新30件）を見る"):
+        if not reports_df.empty and '提出者' in reports_df.columns:
+            my_reports = reports_df[reports_df['提出者'] == user].sort_values('日付', ascending=False).head(30)
+            if my_reports.empty:
+                st.info("過去の履歴はまだありません。")
+            else:
+                for idx, r in my_reports.iterrows():
+                    rep_date = r.get('日付', '')
+                    arr = r.get('出勤時間', '通常')
+                    lev = r.get('退勤時間', '定時')
+                    cond = r.get('機械の調子', '')
+                    note = r.get('特記事項', '')
+                    st.markdown(f"**{rep_date}** | 出勤:{arr} 退勤:{lev} | 🔧{cond}")
+                    if note: st.caption(f"📝特記事項: {note}")
+                    st.divider()
 
 # --- 管理者用ダッシュボード（日報確認機能） ---
 def show_admin_dashboard():
@@ -2192,107 +2225,6 @@ def main_app():
         
     elif main_view == "👑 管理者画面":
         show_admin_dashboard()
-
-# --- Step1のフラグメント化（ロードのチラつき防止） ---
-@st.fragment
-def render_step1_fragment(schedule_df, display_df, selected_location, product_to_location):
-    st.markdown(f"<h3 style='font-size: clamp(0.9rem, 3.5vw, 1.4rem); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;'>Step 1: 新規工程を記録（{selected_location}）</h3>", unsafe_allow_html=True)
-    
-    filtered_schedule_df = schedule_df.copy()
-    if selected_location != "すべて":
-        if not filtered_schedule_df.empty and '拠点' in filtered_schedule_df.columns:
-            filtered_schedule_df = filtered_schedule_df[filtered_schedule_df['拠点'] == selected_location]
-    
-    customer_names = []
-    if not filtered_schedule_df.empty and '得意先名' in filtered_schedule_df.columns:
-        customer_names = sorted(filtered_schedule_df['得意先名'].dropna().unique().tolist())
-    
-    selected_customer = st.selectbox("得意先名で絞り込み", ["すべての得意先"] + customer_names, key="customer_choice")
-    
-    with st.form(key="selection_form"):
-        product_list_df = filtered_schedule_df.copy()
-        if selected_customer != "すべての得意先":
-            product_list_df = product_list_df[product_list_df['得意先名'] == selected_customer]
-
-        schedule_products = []
-        if not product_list_df.empty and '品名' in product_list_df.columns:
-            schedule_products = product_list_df['品名'].dropna().unique().tolist()
-            
-        in_progress_products_in_location = []
-        if not display_df.empty:
-            if '得意先名' not in display_df.columns and '品名' in schedule_df.columns and '得意先名' in schedule_df.columns:
-                product_to_customer_map = schedule_df.drop_duplicates(subset=['品名']).set_index('品名')['得意先名'].to_dict()
-                display_df['得意先名'] = display_df['製品名'].map(product_to_customer_map)
-
-            if selected_customer != "すべての得意先":
-                if '得意先名' in display_df.columns:
-                    in_progress_products_in_location = display_df[display_df['得意先名'] == selected_customer]['製品名'].unique().tolist()
-            else:
-                in_progress_products_in_location = display_df['製品名'].unique().tolist()
-        
-        product_list = sorted(list(set(schedule_products + in_progress_products_in_location)))
-        
-        options = [""] + product_list
-        
-        default_product_index = 0
-        if 'product_choice_final' in st.session_state and st.session_state.product_choice_final in options:
-            default_product_index = options.index(st.session_state.product_choice_final)
-
-        selected_product = st.selectbox("製品を選択（リスト内で検索もできます）", options, index=default_product_index)
-        
-        if selected_product and selected_product != "" and not schedule_df.empty and '品名' in schedule_df.columns:
-            clean_selected = clean_text(selected_product)
-            if 'clean_品名_for_match' not in schedule_df.columns:
-                schedule_df['clean_品名_for_match'] = schedule_df['品名'].apply(clean_text)
-                
-            preview_row = schedule_df[schedule_df['clean_品名_for_match'] == clean_selected]
-            if not preview_row.empty:
-                p_info = preview_row.iloc[0]
-                p_qty = p_info.get(SCHEDULE_COL_TOTAL_QUANTITY, "ー")
-                p_detail = p_info.get(SCHEDULE_COL_DETAILS, "ー")
-                p_due = p_info.get(SCHEDULE_COL_DUE_DATE, "ー")
-                
-                remarks_list = [str(p_info[col]) for col in SCHEDULE_COL_REMARKS if col in p_info and pd.notna(p_info[col])]
-                p_memo = " | ".join(remarks_list)
-                
-                preview_text = f"📦 **総数:** {p_qty}　📅 **納期:** {p_due}　📝 **適用:** {p_detail}"
-                if p_memo:
-                    preview_text += f"\n💡 **備考:** {p_memo}"
-                
-                st.info(preview_text)
-
-        allow_manual_input = st.checkbox("リストにない製品を手入力する")
-        product_name_manual = st.text_input("新しい製品名を入力")
-        process_name = st.selectbox("記録する工程名", PROCESS_OPTIONS)
-        
-        submitted = st.form_submit_button("この工程の入力を開始する", type="primary")
-
-        if submitted:
-            product_name = product_name_manual if allow_manual_input and product_name_manual else selected_product
-            if not product_name or not process_name:
-                st.error("製品名と工程名を両方選択してください。")
-            else:
-                if 'default_page_count' in st.session_state: del st.session_state.default_page_count
-                if 'schedule_info_display' in st.session_state: del st.session_state.schedule_info_display
-                if 'auto_selected_location' in st.session_state: del st.session_state.auto_selected_location
-
-                if not schedule_df.empty and '品名' in schedule_df.columns:
-                    clean_target = clean_text(product_name)
-                    if 'clean_品名_for_match' not in schedule_df.columns:
-                        schedule_df['clean_品名_for_match'] = schedule_df['品名'].apply(clean_text)
-                    product_row = schedule_df[schedule_df['clean_品名_for_match'] == clean_target]
-                    
-                    if not product_row.empty:
-                        info = product_row.iloc[0]
-                        st.session_state.auto_selected_location = product_to_location.get(clean_target, "未設定")
-                        if process_name in ["中綴じ", "無線綴じ", "糸かがり", "綴じ（カレンダー）"] and SCHEDULE_COL_PAGE_COUNT in schedule_df.columns:
-                            page_count_val = pd.to_numeric(info.get(SCHEDULE_COL_PAGE_COUNT), errors='coerce')
-                            st.session_state.default_page_count = int(page_count_val) if pd.notna(page_count_val) else 0
-                    
-                st.session_state.selected_product = product_name
-                st.session_state.selected_process = process_name
-                st.session_state.sub_view = 'INPUT_FORM'
-                st.rerun()
 
 st.markdown(
     "<h1 style='font-size: clamp(1.2rem, 5vw, 2.5rem); padding-top: 1rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;'>📘 製本記録アプリ</h1>", 
