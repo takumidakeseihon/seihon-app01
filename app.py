@@ -927,38 +927,87 @@ def main_app():
             else:
                 p_prod = st.selectbox("親カレンダー", [""] + sorted(cal_sch['品名'].dropna().unique().tolist()))
                 if p_prod:
-                    c_code = cal_sch[cal_sch['品名']==p_prod].iloc[0].get('得意先コード')
-                    if '得意先コード' in sch_m.columns:
-                        t_m = sch_m[sch_m['得意先コード'] == c_code]
+                    parent_row = cal_sch[cal_sch['品名']==p_prod].iloc[0]
+                    # 予定表と明細CSVから「伝票番号」の列を自動で探す
+                    denpyo_col = next((col for col in sch.columns if '伝票' in col), None)
+                    denpyo_m_col = next((col for col in sch_m.columns if '伝票' in col), None)
+                    
+                    t_m = pd.DataFrame()
+                    if denpyo_col and denpyo_m_col:
+                        denpyo_val = parent_row.get(denpyo_col)
+                        if pd.notna(denpyo_val):
+                            t_m = sch_m[sch_m[denpyo_m_col] == denpyo_val]
                     else:
-                        t_m = sch_m # 項目が見つからない場合のフォールバック
+                        # 伝票番号が見つからない場合の予備ルート（得意先コード等）
+                        c_code = parent_row.get('得意先コード')
+                        if pd.notna(c_code) and '得意先コード' in sch_m.columns:
+                            t_m = sch_m[sch_m['得意先コード'] == c_code]
                     
                     if t_m.empty: 
-                        st.warning("このカレンダーの明細が見つかりません。")
+                        st.warning("このカレンダーと同じ伝票番号の明細が見つかりません。")
                     else: 
-                        st.success(f"{len(t_m)}件の明細が見つかりました。")
+                        # 名入れ対象外のキーワード（これらが含まれるものは表示しない）
+                        exclude_words = ["区分け", "包代", "包装", "パレット", "箱代", "PUR", "送料", "運賃", "ダンボール", "段ボール", "値引き", "手数料"]
                         
-                        target_companies = t_m['納品書明細'].dropna().unique().tolist() if '納品書明細' in t_m.columns else t_m.iloc[:, 0].dropna().unique().tolist()
+                        target_items = {}
+                        for _, row in t_m.iterrows():
+                            # 「内容」列を優先し、空なら「納品書明細」列を見る
+                            content_val = str(row.get('内容', '')).strip()
+                            if content_val == 'nan' or not content_val:
+                                content_val = str(row.get('納品書明細', '')).strip()
+                                
+                            if content_val == 'nan' or not content_val:
+                                continue # 会社名がない場合はスキップ
+                                
+                            # 費用項目かどうかを除外キーワードで判定
+                            is_excluded = any(word in content_val for word in exclude_words)
+                            
+                            if not is_excluded:
+                                qty_val = row.get('数量', 0)
+                                try:
+                                    qty = int(float(qty_val)) if pd.notna(qty_val) else 0
+                                except:
+                                    qty = 0
+                                
+                                # 同じ会社名が複数行ある場合は数量を足し算する
+                                if content_val in target_items:
+                                    target_items[content_val]['数量'] += qty
+                                else:
+                                    target_items[content_val] = {'会社名': content_val, '数量': qty}
                         
-                        st.write("対象会社リスト（チェックして一括処理）")
-                        checked_comps = []
-                        for comp in target_companies:
-                            if st.checkbox(str(comp), key=f"cal_chk_{comp}"):
-                                checked_comps.append(comp)
-                        
-                        sel_proc = st.selectbox("一括登録する工程", CALENDAR_PROCESS_OPTIONS)
-                        c1, c2 = st.columns(2)
-                        if c1.button("一括で作業中に追加", type="primary"):
-                            if not checked_comps or not sel_proc: st.error("会社と工程を選択してください。")
-                            else:
-                                b = db.batch()
-                                for c in checked_comps:
-                                    d = {"製品名": p_prod, "詳細": c, "工程名": sel_proc, "ステータス": "作業中", "入力者名": st.session_state.logged_in_user, "作成日時": firestore.SERVER_TIMESTAMP}
-                                    b.set(db.collection("in_progress").document(), d)
-                                b.commit()
-                                st.success("一括追加しました。")
-                                load_from_firestore.clear()
-                                st.rerun()
+                        if not target_items:
+                            st.info("伝票内に、名入れ対象と思われる会社名（内容）が見つかりませんでした。")
+                        else:
+                            st.success(f"{len(target_items)}件の名入れ先（費用項目を除外済）が見つかりました。")
+                            
+                            st.write("対象会社リスト（チェックして一括処理）")
+                            checked_comps = []
+                            for comp, info in target_items.items():
+                                qty_str = f" （{info['数量']:,}部）" if info['数量'] > 0 else ""
+                                if st.checkbox(f"{comp}{qty_str}", key=f"cal_chk_{comp}"):
+                                    checked_comps.append(info)
+                            
+                            sel_proc = st.selectbox("一括登録する工程", CALENDAR_PROCESS_OPTIONS)
+                            c1, c2 = st.columns(2)
+                            if c1.button("一括で作業中に追加", type="primary"):
+                                if not checked_comps or not sel_proc: st.error("会社と工程を選択してください。")
+                                else:
+                                    b = db.batch()
+                                    for item in checked_comps:
+                                        d = {
+                                            "製品名": p_prod, 
+                                            "詳細": item['会社名'], 
+                                            "出来数": item['数量'],
+                                            "工程名": sel_proc, 
+                                            "ステータス": "作業中", 
+                                            "入力者名": st.session_state.logged_in_user, 
+                                            "作成日時": firestore.SERVER_TIMESTAMP
+                                        }
+                                        b.set(db.collection("in_progress").document(), d)
+                                    b.commit()
+                                    st.success(f"{len(checked_comps)}件を一括追加しました。")
+                                    load_from_firestore.clear()
+                                    st.rerun()
 
     elif main_view == "📦 名入れ一括登録":
         st.header("名入れ工程の進捗管理")
