@@ -791,6 +791,62 @@ def main_app():
     if st.sidebar.button("ログアウト"): st.session_state.clear(); st.rerun()
     st.sidebar.button("データ更新", on_click=lambda: (load_from_firestore.clear(), load_tasks_for_customer.clear()), use_container_width=True)
 
+    with st.sidebar.expander("🛠️ 管理者メニュー"):
+        st.markdown("**■ 予定表の手動アップロード**")
+        st.info("朝の自動更新が失敗した際のフェイルセーフです。")
+        uploaded_file = st.file_uploader("予定表 (schedule.csv) をアップロード", type=['csv'], label_visibility="collapsed")
+        if uploaded_file is not None:
+            try:
+                df = pd.read_csv(uploaded_file, encoding="utf-8-sig")
+                st.session_state.manual_schedule_df = df
+                st.success("✅ 手動アップロードされたCSVを適用しました！")
+                if st.button("画面を更新して反映する", use_container_width=True):
+                    load_csv_data.clear()
+                    st.rerun()
+            except Exception as e:
+                st.error(f"読み込みエラー: {e}")
+
+        st.divider()
+        st.markdown("**■ 日報データの抽出 (CSV)**")
+        dl_start = st.date_input("開始日", value=datetime.now(timezone(timedelta(hours=9))).date())
+        dl_end = st.date_input("終了日", value=datetime.now(timezone(timedelta(hours=9))).date())
+        
+        # 抽出用データの準備
+        r_df = load_from_firestore(db, "daily_reports")
+        if not r_df.empty and '日付' in r_df.columns:
+            mask = (r_df['日付'] >= dl_start.strftime('%Y-%m-%d')) & (r_df['日付'] <= dl_end.strftime('%Y-%m-%d'))
+            filtered_reports = r_df[mask].copy()
+            
+            if not filtered_reports.empty:
+                # 拠点情報の追加と画像データ等（長すぎる文字）の整理
+                if '提出者' in filtered_reports.columns:
+                    filtered_reports['拠点'] = filtered_reports['提出者'].map(WORKER_TO_LOCATION).fillna('未設定')
+                if '写真データ' in filtered_reports.columns:
+                    filtered_reports['写真添付'] = filtered_reports['写真データ'].apply(lambda x: "あり" if str(x).startswith("data:image") else "なし")
+                    filtered_reports = filtered_reports.drop(columns=['写真データ'])
+                
+                # 列の並び替えとソート
+                cols_order = ['日付', '拠点', '提出者', '出勤時間', '退勤時間', '機械の調子', 'ヒヤリハット', '漏れている作業', '特記事項', '関連タスク数', '写真添付', '作成日時']
+                final_cols = [c for c in cols_order if c in filtered_reports.columns] + [c for c in filtered_reports.columns if c not in cols_order]
+                filtered_reports = filtered_reports[final_cols]
+                filtered_reports = filtered_reports.sort_values(by=['日付', '拠点', '提出者'])
+                
+                # 文字化け防止のため強制的にバイトデータに変換
+                csv_data = filtered_reports.to_csv(index=False).encode('utf-8-sig')
+                
+                st.download_button(
+                    label="📥 CSVダウンロード",
+                    data=csv_data,
+                    file_name=f"日報データ_{dl_start.strftime('%Y%m%d')}-{dl_end.strftime('%Y%m%d')}.csv",
+                    mime="text/csv",
+                    type="primary",
+                    use_container_width=True
+                )
+            else:
+                st.caption("指定された期間の日報はありません。")
+        else:
+            st.caption("日報データがまだ登録されていません。")
+
     main_view = st.radio("メニュー", ["🔧 通常工程の記録", "📅 カレンダー一括管理", "📦 名入れ一括登録", "📝 日報（退勤報告）", "👑 管理者画面"], horizontal=True, label_visibility="collapsed")
     st.divider()
 
