@@ -22,6 +22,12 @@ from PIL import Image
 # ==========================================
 st.set_page_config(page_title="製本記録アプリ", layout="wide")
 
+# セッションステートの初期化（安全装置）
+if 'sub_view' not in st.session_state:
+    st.session_state.sub_view = 'SELECT_PROCESS'
+if 'submit_disabled' not in st.session_state:
+    st.session_state.submit_disabled = False
+
 # スマホの入力欄で勝手にズームされるのを防ぐ設定
 st.markdown(
     """
@@ -34,7 +40,7 @@ st.markdown(
     unsafe_allow_html=True
 )
 
-# ▼▼▼ スマホのキーボードがセレクトボックスで勝手に出るのを防ぐ裏技 ▼▼▼
+# スマホのキーボードがセレクトボックスで勝手に出るのを防ぐ裏技
 components.html(
     """
     <script>
@@ -665,7 +671,6 @@ def show_daily_report():
     st.markdown("<h2 style='font-size: clamp(1.2rem, 5vw, 2rem); margin-bottom: 1rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;' title='📝 日報（退勤報告）'>📝 日報（退勤報告）</h2>", unsafe_allow_html=True)
     
     user = st.session_state.logged_in_user
-    today = datetime.now(timezone(timedelta(hours=9))).date()
     
     col1, col2 = st.columns([6, 4])
     with col1:
@@ -675,38 +680,31 @@ def show_daily_report():
             load_from_firestore.clear()
             load_tasks_for_customer.clear()
             st.rerun()
-
-    if 'selected_daily_date' not in st.session_state:
-        st.session_state.selected_daily_date = today
     
-    with st.spinner("提出状況と作業記録を確認しています..."):
+    with st.spinner("提出状況を確認しています..."):
         reports_df = load_from_firestore(db, "daily_reports")
         
-        my_tasks_last_7_days = pd.DataFrame()
         in_prog_df = load_from_firestore(db, "in_progress")
-        comp_df = load_from_firestore(db, "completed", days_limit=1000)
+        comp_df = load_from_firestore(db, "completed", days_limit=3000)
         
-        if not in_prog_df.empty: in_prog_df['_collection'] = "in_progress"
-        if not comp_df.empty: comp_df['_collection'] = "completed"
-        all_tasks_df = pd.concat([in_prog_df, comp_df], ignore_index=True) if not in_prog_df.empty or not comp_df.empty else pd.DataFrame()
+        if not in_prog_df.empty:
+            in_prog_df['_collection'] = "in_progress"
+        if not comp_df.empty:
+            comp_df['_collection'] = "completed"
+            
+        if not in_prog_df.empty or not comp_df.empty:
+            all_df = pd.concat([in_prog_df, comp_df], ignore_index=True)
+        else:
+            all_df = pd.DataFrame()
+            
+        if not all_df.empty and '作成日時' in all_df.columns:
+            all_df['作成日時_dt'] = pd.to_datetime(all_df['作成日時'], utc=True).dt.tz_convert('Asia/Tokyo')
         
-        if not all_tasks_df.empty and '作成日時' in all_tasks_df.columns:
-            all_tasks_df['作成日時_dt'] = pd.to_datetime(all_tasks_df['作成日時'], utc=True).dt.tz_convert('Asia/Tokyo')
-            mask = all_tasks_df['作成日時_dt'].dt.date >= (today - timedelta(days=6))
-            recent_tasks = all_tasks_df[mask]
-            
-            def is_involved(row):
-                if row.get('入力者名') == user: return True
-                co_workers = row.get('共同作業者', [])
-                if isinstance(co_workers, list) and user in co_workers: return True
-                if isinstance(co_workers, str) and user in co_workers: return True
-                return False
-            
-            if not recent_tasks.empty:
-                my_tasks_last_7_days = recent_tasks[recent_tasks.apply(is_involved, axis=1)]
+    today = datetime.now(timezone(timedelta(hours=9))).date()
     
-    st.markdown("<h5 style='font-size: clamp(0.9rem, 3.5vw, 1.1rem); margin-bottom: 10px;'>📅 直近1週間の状況（タップで日付移動）</h5>", unsafe_allow_html=True)
+    st.markdown("<h5 style='font-size: clamp(0.9rem, 3.5vw, 1.1rem); margin-bottom: 10px;'>📅 直近1週間の提出状況</h5>", unsafe_allow_html=True)
     
+    # --- タップで移動できるカレンダー ---
     cols = st.columns(7)
     for i in range(7):
         d = today - timedelta(days=6-i)
@@ -714,16 +712,28 @@ def show_daily_report():
         day_label = ["月", "火", "水", "木", "金", "土", "日"][d.weekday()]
         disp_date = f"{d.month}/{d.day}"
         
+        # 1. 日報を出しているかチェック
         is_submitted = False
         if not reports_df.empty and '提出者' in reports_df.columns and '日付' in reports_df.columns:
             if not reports_df[(reports_df['提出者'] == user) & (reports_df['日付'] == d_str)].empty:
                 is_submitted = True
-        
+                
+        # 2. 作業記録があるかチェック
         has_work = False
-        if not my_tasks_last_7_days.empty:
-            has_work = not my_tasks_last_7_days[my_tasks_last_7_days['作成日時_dt'].dt.date == d].empty
+        if not all_df.empty and '作成日時_dt' in all_df.columns:
+            day_df = all_df[all_df['作成日時_dt'].dt.date == d]
+            if not day_df.empty:
+                def check_involved(row):
+                    if row.get('入力者名') == user: return True
+                    cw = row.get('共同作業者', [])
+                    if isinstance(cw, list) and user in cw: return True
+                    if isinstance(cw, str) and user in cw: return True
+                    return False
+                if day_df.apply(check_involved, axis=1).any():
+                    has_work = True
 
-        is_selected = st.session_state.selected_daily_date == d
+        # 3. 見た目とステータスの決定
+        is_selected = st.session_state.get('selected_daily_date', today) == d
         
         if is_submitted:
             status_text = "✅済"
@@ -756,7 +766,7 @@ def show_daily_report():
                 
     st.divider()
     
-    target_date = st.session_state.selected_daily_date
+    target_date = st.session_state.get('selected_daily_date', today)
     target_date_str = target_date.strftime('%Y-%m-%d')
     st.markdown(f"#### 📅 選択中の日付: {target_date.strftime('%Y年%m月%d日')}")
 
@@ -791,8 +801,8 @@ def show_daily_report():
     today_tasks = pd.DataFrame()
     other_tasks = pd.DataFrame()
     
-    if not all_tasks_df.empty and '作成日時_dt' in all_tasks_df.columns:
-        today_df = all_tasks_df[all_tasks_df['作成日時_dt'].dt.date == target_date]
+    if not all_df.empty and '作成日時_dt' in all_df.columns:
+        today_df = all_df[all_df['作成日時_dt'].dt.date == target_date]
         
         def is_involved_today(row):
             if row.get('入力者名') == user: return True
@@ -828,7 +838,6 @@ def show_daily_report():
             detail = row.get('詳細', '')
             qty = int(row.get('出来数', 0))
             is_helper = row.get('入力者名') != user
-            
             machine = row.get('使用機械', '')
             
             qty_str = f"{qty:,}個"
@@ -882,7 +891,9 @@ def show_daily_report():
                     time_str = f"{start_t}~" if start_t else "時間なし"
                 
                 worker_short = worker.split(" ")[0].split("　")[0] 
+                
                 label = f"【{product}】{process} ({worker_short}) | {time_str} | {machine_str}{setup_badge} {qty_str}"
+                
                 task_options[label] = row
                 
             selected_task_label = st.selectbox("手伝った作業を選んでください", ["（ここから作業を選択）"] + list(task_options.keys()))
@@ -1033,7 +1044,7 @@ def show_daily_report():
             except Exception as e:
                 st.error(f"日報の送信に失敗しました: {e}")
 
-    # 過去の履歴表示
+    # --- 過去の日報履歴（通信量ゼロの最新実装） ---
     st.divider()
     st.markdown("### 📂 過去の日報履歴")
     with st.expander("あなたの過去の提出履歴（最新30件）を見る"):
@@ -1085,33 +1096,20 @@ def show_admin_dashboard():
     
     with st.spinner("データベースから日報と作業記録を取得中..."):
         reports_df = load_from_firestore(db, "daily_reports")
-        
         in_prog_df = load_from_firestore(db, "in_progress")
         comp_df = load_from_firestore(db, "completed", days_limit=3000)
         
-        if not in_prog_df.empty:
-            in_prog_df['_collection'] = "in_progress"
-        if not comp_df.empty:
-            comp_df['_collection'] = "completed"
+        if not in_prog_df.empty: in_prog_df['_collection'] = "in_progress"
+        if not comp_df.empty: comp_df['_collection'] = "completed"
             
         all_tasks_df = pd.concat([in_prog_df, comp_df], ignore_index=True) if not in_prog_df.empty or not comp_df.empty else pd.DataFrame()
         today_tasks_df = pd.DataFrame()
-        
         if not all_tasks_df.empty and '作成日時' in all_tasks_df.columns:
             all_tasks_df['作成日時_dt'] = pd.to_datetime(all_tasks_df['作成日時'], utc=True).dt.tz_convert('Asia/Tokyo')
 
-    if 'admin_tab_selection' not in st.session_state:
-        st.session_state.admin_tab_selection = "📊 日報・作業記録の確認"
-
-    admin_tab = st.radio(
-        "管理者画面メニュー",
-        ["📊 日報・作業記録の確認", "🛠️ 未照合データの一括修正"],
-        horizontal=True,
-        label_visibility="collapsed",
-        key="admin_tab_selection"
-    )
+    admin_tab = st.radio("管理者画面メニュー", ["📊 日報・作業記録の確認", "🛠️ 未照合データの一括修正"], horizontal=True, key="admin_tab_selection")
     st.divider()
-    
+
     if admin_tab == "📊 日報・作業記録の確認":
         col1, col2, col3 = st.columns([1.5, 2, 1.5])
         with col1:
@@ -1120,7 +1118,6 @@ def show_admin_dashboard():
             default_loc = "すべて"
             if current_user == "岳　匠": default_loc = "旭川"
             elif current_user == "福田 準也": default_loc = "札幌"
-            
             loc_options = ["すべて", "旭川", "札幌"]
             default_idx = loc_options.index(default_loc)
             location_filter = st.radio("🏢 表示する拠点", loc_options, index=default_idx, horizontal=True)
@@ -1134,12 +1131,9 @@ def show_admin_dashboard():
         if not all_tasks_df.empty and '作成日時_dt' in all_tasks_df.columns:
             today_tasks_df = all_tasks_df[all_tasks_df['作成日時_dt'].dt.date == target_date]
             
-        if location_filter == "旭川":
-            target_members = ASAHIKAWA_MEMBERS
-        elif location_filter == "札幌":
-            target_members = SAPPORO_MEMBERS
-        else:
-            target_members = WORKER_NAMES
+        if location_filter == "旭川": target_members = ASAHIKAWA_MEMBERS
+        elif location_filter == "札幌": target_members = SAPPORO_MEMBERS
+        else: target_members = WORKER_NAMES
             
         target_date_str = target_date.strftime('%Y-%m-%d')
         
@@ -1155,9 +1149,7 @@ def show_admin_dashboard():
         if not today_tasks_df.empty:
             for _, row in today_tasks_df.iterrows():
                 worker = row.get('入力者名')
-                if pd.notna(worker) and worker in target_members:
-                    worked_members.add(worker)
-                
+                if pd.notna(worker) and worker in target_members: worked_members.add(worker)
                 co_workers = row.get('共同作業者', [])
                 if isinstance(co_workers, list):
                     for cw in co_workers:
@@ -1174,10 +1166,8 @@ def show_admin_dashboard():
             st.error("、 ".join(missing_members))
             st.caption("※今日システムに作業記録があるにも関わらず、日報が未提出の方です。（休みの人は表示されません）")
         else:
-            if worked_members:
-                st.success("今日作業記録がある方は全員提出済みです！素晴らしい！🎉")
-            else:
-                st.info("この日の作業記録はまだありません。")
+            if worked_members: st.success("今日作業記録がある方は全員提出済みです！素晴らしい！🎉")
+            else: st.info("この日の作業記録はまだありません。")
             
         st.divider()
             
@@ -1211,10 +1201,8 @@ def show_admin_dashboard():
                 loc = row.get('拠点', '')
                 arrive_time = row.get('出勤時間', '早出なし')
                 leave_time = row.get('退勤時間', '残業なし')
-                
                 arrive_time = "早出なし" if pd.isna(arrive_time) else str(arrive_time)
                 leave_time = "残業なし" if pd.isna(leave_time) else str(leave_time)
-                
                 arr_disp = arrive_time if "なし" not in arrive_time else "通常"
                 lev_disp = leave_time if "なし" not in leave_time else "定時"
                 
@@ -1242,7 +1230,6 @@ def show_admin_dashboard():
                             qty = int(t_row.get('出来数', 0))
                             machine = t_row.get('使用機械', '')
                             is_helper = t_row.get('入力者名') != worker
-                            
                             qty_str = f"{qty:,}個"
                             setup_badge = " 🔧セットのみ" if qty == 0 else ""
                             machine_str = f"[{machine}]" if machine else ""
@@ -1267,22 +1254,16 @@ def show_admin_dashboard():
                     st.divider()
 
                     st.markdown(f"**🔧 機械の調子:** {row.get('機械の調子', '未記入')}")
-                    
                     hiyari = row.get('ヒヤリハット', '未記入')
-                    if "あり" in hiyari:
-                        st.markdown(f"**⚠️ ヒヤリハット:** <span style='color:red;'>{hiyari}</span>", unsafe_allow_html=True)
-                    else:
-                        st.markdown(f"**⚠️ ヒヤリハット:** {hiyari}")
+                    if "あり" in hiyari: st.markdown(f"**⚠️ ヒヤリハット:** <span style='color:red;'>{hiyari}</span>", unsafe_allow_html=True)
+                    else: st.markdown(f"**⚠️ ヒヤリハット:** {hiyari}")
                     
                     missing = row.get('漏れている作業', '')
-                    if missing:
-                        st.markdown(f"**✍️ 追加申告作業:**\n> {missing}")
+                    if missing: st.markdown(f"**✍️ 追加申告作業:**\n> {missing}")
                         
                     note = row.get('特記事項', '')
-                    if note:
-                        st.markdown(f"**💡 特記事項:**\n> {note}")
-                    else:
-                        st.markdown("**💡 特記事項:** なし")
+                    if note: st.markdown(f"**💡 特記事項:**\n> {note}")
+                    else: st.markdown("**💡 特記事項:** なし")
                         
                     photo = row.get('写真データ', '')
                     if photo and isinstance(photo, str) and photo.startswith('data:image'):
@@ -1290,13 +1271,10 @@ def show_admin_dashboard():
 
     elif admin_tab == "🛠️ 未照合データの一括修正":
         st.markdown("現場が「仮の名前」で入力した過去の作業記録を、予定表の「正式な名前」に一括で書き換えます。")
-        
         st.markdown("##### Step 1: 検索条件と予定表データの設定")
         col_date1, col_date2 = st.columns(2)
-        with col_date1:
-            fix_start_date = st.date_input("検索開始日", value=datetime.now(timezone(timedelta(hours=9))).date() - timedelta(days=7), key="fix_start")
-        with col_date2:
-            fix_end_date = st.date_input("検索終了日", value=datetime.now(timezone(timedelta(hours=9))).date(), key="fix_end")
+        with col_date1: fix_start_date = st.date_input("検索開始日", value=datetime.now(timezone(timedelta(hours=9))).date() - timedelta(days=7), key="fix_start")
+        with col_date2: fix_end_date = st.date_input("検索終了日", value=datetime.now(timezone(timedelta(hours=9))).date(), key="fix_end")
             
         st.info("💡 過去の品名に紐付ける場合は、当時の予定表(CSV)をここにアップロードしてください。現場の入力画面には影響しません。")
         uploaded_past_csv = st.file_uploader("過去の予定表 (schedule.csv) ※任意", type=['csv'], key="past_schedule_upload")
@@ -1332,11 +1310,8 @@ def show_admin_dashboard():
         col_from, col_to = st.columns(2)
         with col_from:
             st.write("**変更したい（間違っている）品名**")
-            if unmatched_products:
-                source_options = [""] + unmatched_products
-            else:
-                source_options = ["（指定期間内の未照合はありません）"]
-            
+            if unmatched_products: source_options = [""] + unmatched_products
+            else: source_options = ["（指定期間内の未照合はありません）"]
             source_product = st.selectbox("Firebaseに登録されている品名 (未照合のみ)", source_options)
             
         with col_to:
@@ -1349,7 +1324,6 @@ def show_admin_dashboard():
         if source_product and not source_product.startswith("（"):
             st.markdown(f"**🔍 「{source_product}」の作業履歴（推測の手がかり）**")
             details_df = target_tasks_df[target_tasks_df['製品名'] == source_product].sort_values('作成日時_dt')
-            
             for _, r in details_df.iterrows():
                 work_date = r['作成日時_dt'].strftime('%Y/%m/%d %H:%M')
                 worker = r.get('入力者名', '不明')
@@ -1377,7 +1351,6 @@ def show_admin_dashboard():
                             db_batch = firestore.client()
                             batch = db_batch.batch()
                             update_count = 0
-                            
                             for _, row in target_rows.iterrows():
                                 doc_id = row.get('id')
                                 col_name = row.get('_collection')
@@ -1385,7 +1358,6 @@ def show_admin_dashboard():
                                     doc_ref = db_batch.collection(col_name).document(doc_id)
                                     batch.update(doc_ref, {"製品名": final_target})
                                     update_count += 1
-                                    
                             if update_count > 0:
                                 batch.commit()
                                 st.session_state.success_msg = f"✅ {update_count}件の作業記録を「{final_target}」に書き換えました！"
@@ -1395,9 +1367,8 @@ def show_admin_dashboard():
                     except Exception as e:
                         st.error(f"更新中にエラーが発生しました: {e}")
 
-# --- Step1のフラグメント化（ロードのチラつき防止） ---
-@st.fragment
-def render_step1_fragment(schedule_df, display_df, selected_location, product_to_location):
+# --- Step1の描画（通常工程） ---
+def render_step1(schedule_df, display_df, selected_location, product_to_location):
     st.markdown(f"<h3 style='font-size: clamp(0.9rem, 3.5vw, 1.4rem); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;'>Step 1: 新規工程を記録（{selected_location}）</h3>", unsafe_allow_html=True)
     
     filtered_schedule_df = schedule_df.copy()
@@ -1433,7 +1404,6 @@ def render_step1_fragment(schedule_df, display_df, selected_location, product_to
                 in_progress_products_in_location = display_df['製品名'].unique().tolist()
         
         product_list = sorted(list(set(schedule_products + in_progress_products_in_location)))
-        
         options = [""] + product_list
         
         default_product_index = 0
@@ -1458,9 +1428,7 @@ def render_step1_fragment(schedule_df, display_df, selected_location, product_to
                 p_memo = " | ".join(remarks_list)
                 
                 preview_text = f"📦 **総数:** {p_qty}　📅 **納期:** {p_due}　📝 **適用:** {p_detail}"
-                if p_memo:
-                    preview_text += f"\n💡 **備考:** {p_memo}"
-                
+                if p_memo: preview_text += f"\n💡 **備考:** {p_memo}"
                 st.info(preview_text)
 
         allow_manual_input = st.checkbox("リストにない製品を手入力する")
@@ -1523,8 +1491,7 @@ def main_app():
         for key in list(st.session_state.keys()):
             if key not in ['_sidebar_state', 'query_params']:
                 del st.session_state[key]
-        if hasattr(st, "query_params"):
-            st.query_params.clear()
+        if hasattr(st, "query_params"): st.query_params.clear()
         load_from_firestore.clear()
         load_tasks_for_customer.clear()
         st.rerun()
@@ -1576,7 +1543,6 @@ def main_app():
         if not r_df.empty and '日付' in r_df.columns:
             mask = (r_df['日付'] >= dl_start.strftime('%Y-%m-%d')) & (r_df['日付'] <= dl_end.strftime('%Y-%m-%d'))
             filtered_reports = r_df[mask].copy()
-            
             if not filtered_reports.empty:
                 if '提出者' in filtered_reports.columns:
                     filtered_reports['拠点'] = filtered_reports['提出者'].map(WORKER_TO_LOCATION).fillna('未設定')
@@ -1588,7 +1554,6 @@ def main_app():
                 final_cols = [c for c in cols_order if c in filtered_reports.columns] + [c for c in filtered_reports.columns if c not in cols_order]
                 filtered_reports = filtered_reports[final_cols]
                 filtered_reports = filtered_reports.sort_values(by=['日付', '拠点', '提出者'])
-                
                 csv_data = filtered_reports.to_csv(index=False).encode('utf-8-sig')
                 
                 st.download_button(
@@ -1624,7 +1589,26 @@ def main_app():
             else:
                 st.session_state.naire_parent_customers = []
 
-        if st.session_state.sub_view == 'SELECT_PROCESS':
+        # ★バグ防止の安全措置: セッションステートが壊れていたら必ずSELECT_PROCESSに戻す
+        sub_view = st.session_state.get('sub_view', 'SELECT_PROCESS')
+        
+        if sub_view == 'INPUT_FORM':
+            if 'record_to_copy' in st.session_state:
+                process_form(is_edit_mode=False, default_data=st.session_state.record_to_copy)
+            else:
+                process_form(is_edit_mode=False)
+                
+        elif sub_view == 'EDIT_FORM':
+            record_to_edit = st.session_state.get('record_to_edit')
+            if record_to_edit:
+                process_form(is_edit_mode=True, default_data=record_to_edit)
+            else:
+                st.error("編集対象が指定されていません。")
+                st.session_state.sub_view = 'SELECT_PROCESS'
+                st.rerun()
+                
+        else: # SELECT_PROCESS または予期せぬ文字列が入っていた場合の絶対表示（フェイルセーフ）
+            st.session_state.sub_view = 'SELECT_PROCESS'
             schedule_df = load_csv_data(SCHEDULE_FILE)
             location_options = ["すべて", "旭川", "札幌"]
             product_to_location = {}
@@ -1652,43 +1636,29 @@ def main_app():
 
             display_df = in_progress_df.copy()
             if not display_df.empty and "製品名" in display_df.columns:
-                if '拠点' not in display_df.columns:
-                    display_df['拠点'] = "未設定"
-                
+                if '拠点' not in display_df.columns: display_df['拠点'] = "未設定"
                 unassigned_mask = display_df['拠点'].isin(['', '未設定', None]) | display_df['拠点'].isna()
                 if unassigned_mask.any():
                     display_df['clean_製品名'] = display_df['製品名'].astype(str).str.strip()
                     if '入力者名' in display_df.columns:
                         display_df.loc[unassigned_mask, '拠点'] = display_df.loc[unassigned_mask, '入力者名'].map(WORKER_TO_LOCATION)
-                
                 display_df['拠点'].fillna('未設定', inplace=True)
                 display_df.drop(columns=['clean_製品名'], inplace=True, errors='ignore')
-
-                if selected_location != "すべて":
-                    display_df = display_df[display_df['拠点'] == selected_location]
+                if selected_location != "すべて": display_df = display_df[display_df['拠点'] == selected_location]
             
             col_form, col_list = st.columns(2)
             with col_form:
-                render_step1_fragment(schedule_df, display_df, selected_location, product_to_location)
+                render_step1(schedule_df, display_df, selected_location, product_to_location)
 
             with col_list:
                 st.markdown(f"<h3 style='font-size: clamp(0.9rem, 3.5vw, 1.4rem); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;'>進行中の作業一覧（{selected_location}）</h3>", unsafe_allow_html=True)
-                
-                view_filter = st.radio(
-                    "表示フィルター",
-                    ["すべて表示", "通常工程のみ", "名入れ作業のみ"],
-                    index=1,
-                    horizontal=True,
-                    key="view_filter"
-                )
+                view_filter = st.radio("表示フィルター", ["すべて表示", "通常工程のみ", "名入れ作業のみ"], index=1, horizontal=True, key="view_filter")
                 
                 naire_parent_customers = st.session_state.get("naire_parent_customers", [])
                 if view_filter == "通常工程のみ":
-                    if not display_df.empty and '製品名' in display_df.columns:
-                        display_df = display_df[~display_df['製品名'].isin(naire_parent_customers)]
+                    if not display_df.empty and '製品名' in display_df.columns: display_df = display_df[~display_df['製品名'].isin(naire_parent_customers)]
                 elif view_filter == "名入れ作業のみ":
-                    if not display_df.empty and '製品名' in display_df.columns:
-                        display_df = display_df[display_df['製品名'].isin(naire_parent_customers)]
+                    if not display_df.empty and '製品名' in display_df.columns: display_df = display_df[display_df['製品名'].isin(naire_parent_customers)]
 
                 if display_df.empty:
                     st.info("現在、選択された条件で作業中の製品はありません。")
@@ -1709,16 +1679,12 @@ def main_app():
                                 with c1:
                                     worker_name_display = row.get('入力者名', '不明')
                                     machine_display = row.get('使用機械', '')
-                                    
                                     qty_display = f"{row['出来数']}個"
                                     setup_badge = " 🔧セットのみ" if int(row['出来数']) == 0 else ""
                                     
                                     caption_text = f"工程: {row['工程名']} ({row['詳細']}) | 出来数: {qty_display} | 入力者: {worker_name_display}"
-                                    if machine_display:
-                                        caption_text += f" | 機械: [{machine_display}]{setup_badge}"
-                                    elif setup_badge:
-                                        caption_text += f" | 機械: なし{setup_badge}"
-                                        
+                                    if machine_display: caption_text += f" | 機械: [{machine_display}]{setup_badge}"
+                                    elif setup_badge: caption_text += f" | 機械: なし{setup_badge}"
                                     st.caption(caption_text)
                                 with c2:
                                     if st.button("編集", key=f"edit_{row['id']}", use_container_width=True):
@@ -1728,13 +1694,10 @@ def main_app():
                                 with c3:
                                     if st.button("🔁続き", key=f"copy_{row['id']}", help="この作業の情報を引き継いで、新しく記録します", use_container_width=True):
                                         copy_data = row.to_dict()
-                                        copy_data['開始時間'] = ""
-                                        copy_data['終了時間'] = ""
+                                        copy_data['開始時間'], copy_data['終了時間'] = "", ""
                                         copy_data['作業時間_分'] = 60 if copy_data.get('工程名') == "断裁" else 0
-                                        copy_data['出来数'] = 0
+                                        copy_data['出来数'], copy_data['セット人数'], copy_data['セット時間_分'] = 0, 0.0, 0
                                         copy_data['備考'] = ""
-                                        copy_data['セット人数'] = 0.0
-                                        copy_data['セット時間_分'] = 0
                                         copy_data['共同作業者'] = []
                                         copy_data['入力者名'] = st.session_state.logged_in_user
                                         
@@ -1752,8 +1715,7 @@ def main_app():
                                 st.markdown("本当にこの工程を削除しますか？")
                                 if st.button("はい、削除します", key=f"delete_confirm_{row['id']}", type="primary", use_container_width=True):
                                     try:
-                                        if not firebase_admin._apps:
-                                            init_firebase()
+                                        if not firebase_admin._apps: init_firebase()
                                         db_del = firestore.client()
                                         db_del.collection("in_progress").document(row['id']).delete()
                                         load_from_firestore.clear()
@@ -1762,20 +1724,6 @@ def main_app():
                                     except Exception as e:
                                         st.error(f"削除中にエラーが発生しました: {e}")
                             st.divider()
-                            
-        elif st.session_state.sub_view == 'INPUT_FORM':
-            if 'record_to_copy' in st.session_state:
-                process_form(is_edit_mode=False, default_data=st.session_state.record_to_copy)
-            else:
-                process_form(is_edit_mode=False)
-                
-        elif st.session_state.sub_view == 'EDIT_FORM':
-            record_to_edit = st.session_state.get('record_to_edit')
-            if record_to_edit:
-                process_form(is_edit_mode=True, default_data=record_to_edit)
-            else:
-                st.error("編集対象が指定されていません。")
-                st.session_state.sub_view = 'SELECT_PROCESS'
 
     elif main_view == "📅 カレンダー一括管理":
         st.header("📅 カレンダー作業の進捗管理")
@@ -1822,7 +1770,6 @@ def main_app():
                                 
                             st.subheader("工程進捗ボード")
                             board_processes = ["断裁", "丁合", "綴じ", "梱包", "綴じ+梱包"]
-                            
                             detail_col = '納品書明細' if '納品書明細' in target_m_df.columns else '内容'
                             
                             companies_data = []
@@ -1850,49 +1797,38 @@ def main_app():
                                 row_data = {"名入れ先": company, "数量": comp_info["数量"]}
                                 done_procs = task_status.get(company, [])
                                 for process in board_processes:
-                                    if process == "綴じ+梱包":
-                                        is_done = ("綴じ+梱包" in done_procs) or ("綴じ" in done_procs and "梱包" in done_procs)
-                                    else:
-                                        is_done = process in done_procs or ("綴じ+梱包" in done_procs and process in ["綴じ", "梱包"])
+                                    if process == "綴じ+梱包": is_done = ("綴じ+梱包" in done_procs) or ("綴じ" in done_procs and "梱包" in done_procs)
+                                    else: is_done = process in done_procs or ("綴じ+梱包" in done_procs and process in ["綴じ", "梱包"])
                                     row_data[process] = "✅" if is_done else ""
                                 board_data.append(row_data)
                                 
                             if board_data:
                                 st.dataframe(pd.DataFrame(board_data).set_index("名入れ先"), use_container_width=True)
 
-                            if 'cal_reset_key' not in st.session_state:
-                                st.session_state.cal_reset_key = 0
+                            if 'cal_reset_key' not in st.session_state: st.session_state.cal_reset_key = 0
 
                             with st.expander("新しい工程を一括登録・完了する", expanded=True):
                                 st.write("**1. 登録/完了する項目をチェック**")
-                                
                                 checked_items = []
-                                
-                                def get_cal_check_key(idx):
-                                    return f"cal_check_{idx}_{st.session_state.cal_reset_key}"
+                                def get_cal_check_key(idx): return f"cal_check_{idx}_{st.session_state.cal_reset_key}"
 
                                 col1_select, col2_select, _ = st.columns([1,1,4])
                                 if col1_select.button("すべて選択", key="cal_select_all"):
-                                    for idx in range(len(companies_data)):
-                                        st.session_state[get_cal_check_key(idx)] = True
+                                    for idx in range(len(companies_data)): st.session_state[get_cal_check_key(idx)] = True
                                     st.rerun()
                                 if col2_select.button("すべて解除", key="cal_deselect_all"):
-                                    for idx in range(len(companies_data)):
-                                        st.session_state[get_cal_check_key(idx)] = False
+                                    for idx in range(len(companies_data)): st.session_state[get_cal_check_key(idx)] = False
                                     st.rerun()
 
                                 for idx, comp_info in enumerate(companies_data):
                                     company_name = comp_info['会社名']
                                     quantity_val = int(pd.to_numeric(comp_info['数量'], errors='coerce')) if pd.notna(comp_info['数量']) else 0
-                                    
                                     done_processes = task_status.get(company_name, [])
                                     done_badges = " ".join([f"`{p}`" for p in done_processes]) if done_processes else "未着手"
                                     
                                     label = f"**{company_name}** | 📦 部数: {quantity_val} | 📝 完了: {done_badges}"
                                     key = get_cal_check_key(idx)
-                                    
-                                    if st.checkbox(label, key=key):
-                                        checked_items.append(comp_info)
+                                    if st.checkbox(label, key=key): checked_items.append(comp_info)
                                         
                                 st.divider()
                                 st.write("**2. 登録する工程内容**")
@@ -1900,10 +1836,8 @@ def main_app():
                                 
                                 with st.form("cal_bulk_form"):
                                     current_process = st.session_state.get("cal_bulk_process", "")
-                                    if current_process == '断裁':
-                                        work_time_input = st.selectbox("（チェックした全体の）合計作業時間（分）", [str(i * 10) for i in range(1, 73)])
-                                    elif not current_process:
-                                        st.info("まず上のメニューから工程を選択してください。")
+                                    if current_process == '断裁': work_time_input = st.selectbox("（チェックした全体の）合計作業時間（分）", [str(i * 10) for i in range(1, 73)])
+                                    elif not current_process: st.info("まず上のメニューから工程を選択してください。")
                                     else:
                                         start_time_input = st.time_input("開始時間", step=600, value=time(9, 0))
                                         end_time_input = st.time_input("終了時間", step=600, value=time(10, 0))
@@ -1921,8 +1855,7 @@ def main_app():
                                         checked_count = len(checked_items)
                                         
                                         total_work_time, start_time_str, end_time_str = 0, "", ""
-                                        if current_process == '断裁':
-                                            total_work_time = int(work_time_input)
+                                        if current_process == '断裁': total_work_time = int(work_time_input)
                                         else:
                                             if not (start_time_input and end_time_input and end_time_input > start_time_input):
                                                 st.error("終了時間は開始時間より後にしてください。"); st.stop()
@@ -1934,8 +1867,7 @@ def main_app():
                                         batch = db.batch()
                                         for item in checked_items:
                                             new_record_data = {
-                                                "入力者名": st.session_state.logged_in_user,
-                                                "拠点": st.session_state.get('user_location', "未設定"),
+                                                "入力者名": st.session_state.logged_in_user, "拠点": st.session_state.get('user_location', "未設定"),
                                                 "記録ID": datetime.now().strftime("%Y%m%d%H%M%S%f") + f"_{item['id']}", 
                                                 "製品名": selected_parent_product, "工程名": current_process, "詳細": item['会社名'], 
                                                 "開始時間": start_time_str, "終了時間": end_time_str, "作業時間_分": work_time_per_item,
@@ -1952,16 +1884,13 @@ def main_app():
                                     if complete_submitted:
                                         if not checked_items: st.warning("完了にする項目がチェックされていません。"); st.stop()
                                         batch = db.batch()
-                                        
                                         company_names_to_complete = [item['会社名'] for item in checked_items]
                                         in_progress_df = st.session_state.get('in_progress_df', pd.DataFrame())
                                         
                                         if not in_progress_df.empty:
                                             docs_to_move = in_progress_df[
-                                                (in_progress_df["製品名"] == selected_parent_product) &
-                                                (in_progress_df["詳細"].isin(company_names_to_complete))
+                                                (in_progress_df["製品名"] == selected_parent_product) & (in_progress_df["詳細"].isin(company_names_to_complete))
                                             ]
-                                            
                                             for index, row in docs_to_move.iterrows():
                                                 doc_data = row.to_dict(); doc_data['ステータス'] = '完了'
                                                 doc_data['完了日時'] = firestore.SERVER_TIMESTAMP
@@ -2029,8 +1958,7 @@ def main_app():
                 else:
                     st.info("この得意先のすべての名入れ工程は完了（出荷待ち）です。")
 
-                if 'naire_reset_key' not in st.session_state:
-                    st.session_state.naire_reset_key = 0
+                if 'naire_reset_key' not in st.session_state: st.session_state.naire_reset_key = 0
 
                 with st.expander("新しい工程を一括登録・完了する", expanded=True):
                     target_list_df = uncompleted_master_list.copy()
@@ -2050,17 +1978,14 @@ def main_app():
                     if target_list_df.empty:
                         st.info("この得意先のすべての名入れ工程は完了（出荷待ち）です。")
                     else:
-                        def get_check_key(row_id):
-                            return f"check_{row_id}_{st.session_state.naire_reset_key}"
+                        def get_check_key(row_id): return f"check_{row_id}_{st.session_state.naire_reset_key}"
 
                         col1_select, col2_select, _ = st.columns([1,1,4])
                         if col1_select.button("すべて選択", key="select_all_btn"):
-                            for index, row in target_list_df.iterrows():
-                                st.session_state[get_check_key(row['id'])] = True
+                            for index, row in target_list_df.iterrows(): st.session_state[get_check_key(row['id'])] = True
                             st.rerun()
                         if col2_select.button("すべて解除", key="deselect_all_btn"):
-                            for index, row in target_list_df.iterrows():
-                                st.session_state[get_check_key(row['id'])] = False
+                            for index, row in target_list_df.iterrows(): st.session_state[get_check_key(row['id'])] = False
                             st.rerun()
 
                         for index, row in target_list_df.iterrows():
@@ -2071,60 +1996,45 @@ def main_app():
                             
                             done_processes = task_status.get(company_name, [])
                             done_badges = " ".join([f"`{p}`" for p in done_processes]) if done_processes else "未着手"
-                            
                             label = f"**{company_name}**\n  📅 納期: {delivery_date} | 📦 部数: {quantity_val} | 📝 完了: {done_badges}"
-                            
                             key = get_check_key(row['id'])
                             
                             c_check, c_edit = st.columns([0.85, 0.15])
                             with c_check:
-                                if st.checkbox(label, key=key):
-                                    checked_items.append(row)
+                                if st.checkbox(label, key=key): checked_items.append(row)
                             with c_edit:
                                 with st.popover("編集"):
                                     st.write(f"**{company_name}** を編集・削除")
                                     with st.form(key=f"edit_master_{row['id']}"):
                                         new_name = st.text_input("会社名", value=company_name)
-                                        try:
-                                            default_date = pd.to_datetime(delivery_date).date()
-                                        except:
-                                            default_date = None
+                                        try: default_date = pd.to_datetime(delivery_date).date()
+                                        except: default_date = None
                                         new_date = st.date_input("納期", value=default_date)
                                         new_qty = st.number_input("部数", value=quantity_val, step=1)
                                         
                                         if st.form_submit_button("変更を保存"):
-                                            update_data = {
-                                                "会社名": new_name,
-                                                "数量": new_qty,
-                                                "納期": new_date.strftime('%Y/%m/%d') if new_date else ""
-                                            }
-                                            if not firebase_admin._apps:
-                                                init_firebase()
+                                            update_data = { "会社名": new_name, "数量": new_qty, "納期": new_date.strftime('%Y/%m/%d') if new_date else "" }
+                                            if not firebase_admin._apps: init_firebase()
                                             db.collection("naire_master").document(row['id']).update(update_data)
                                             load_from_firestore.clear()
                                             st.session_state.success_msg = f"「{company_name}」の情報を更新しました。"
                                             st.rerun()
-                                    
                                     st.divider()
                                     if st.button("削除する", key=f"del_master_{row['id']}", type="primary"):
-                                        if not firebase_admin._apps:
-                                            init_firebase()
+                                        if not firebase_admin._apps: init_firebase()
                                         db.collection("naire_master").document(row['id']).delete()
                                         load_from_firestore.clear()
                                         st.session_state.success_msg = f"「{company_name}」を削除しました。"
                                         st.rerun()
 
                     st.divider()
-
                     st.write("**2. 登録する工程内容**")
                     process_name = st.selectbox("工程名", NAIRE_PROCESS_OPTIONS, key="bulk_process_name")
 
                     with st.form("bulk_form"):
                         current_process = st.session_state.get("bulk_process_name", "")
-                        if current_process == '断裁':
-                            work_time_input = st.selectbox("（チェックした全体の）合計作業時間（分）", [str(i * 10) for i in range(1, 73)])
-                        elif not current_process:
-                             st.info("まず上のメニューから工程を選択してください。")
+                        if current_process == '断裁': work_time_input = st.selectbox("（チェックした全体の）合計作業時間（分）", [str(i * 10) for i in range(1, 73)])
+                        elif not current_process: st.info("まず上のメニューから工程を選択してください。")
                         else:
                             start_time_input = st.time_input("開始時間", step=600, value=time(9, 0))
                             end_time_input = st.time_input("終了時間", step=600, value=time(10, 0))
@@ -2143,8 +2053,7 @@ def main_app():
                             if invalid_quantity_items: st.error(f"❌ 以下の項目は数量が0または無効: {', '.join(invalid_quantity_items)}"); st.stop()
 
                             total_work_time, start_time_str, end_time_str = 0, "", ""
-                            if current_process == '断裁':
-                                total_work_time = int(work_time_input)
+                            if current_process == '断裁': total_work_time = int(work_time_input)
                             else:
                                 if not (start_time_input and end_time_input and end_time_input > start_time_input):
                                     st.error("終了時間は開始時間より後にしてください。"); st.stop()
@@ -2156,8 +2065,7 @@ def main_app():
                             batch = db.batch()
                             for item in checked_items:
                                 new_record_data = {
-                                    "入力者名": st.session_state.logged_in_user,
-                                    "拠点": st.session_state.get('user_location', "未設定"),
+                                    "入力者名": st.session_state.logged_in_user, "拠点": st.session_state.get('user_location', "未設定"),
                                     "記録ID": datetime.now().strftime("%Y%m%d%H%M%S%f") + f"_{item['id']}", 
                                     "製品名": selected_parent_customer, "工程名": current_process, "詳細": item.get('会社名', ''), 
                                     "開始時間": start_time_str, "終了時間": end_time_str, "作業時間_分": work_time_per_item,
@@ -2166,7 +2074,6 @@ def main_app():
                                 }
                                 batch.set(db.collection("in_progress").document(), new_record_data)
                             batch.commit()
-                            
                             st.session_state.naire_reset_key += 1
                             st.session_state.success_msg = f"{len(checked_items)}件の記録を登録しました。"
                             st.rerun()
@@ -2174,16 +2081,13 @@ def main_app():
                         if complete_submitted:
                             if not checked_items: st.warning("完了にする項目がチェックされていません。"); st.stop()
                             batch = db.batch()
-                            
                             company_names_to_complete = [item['会社名'] for item in checked_items]
                             in_progress_df = st.session_state.get('in_progress_df', pd.DataFrame())
                             
                             if not in_progress_df.empty:
                                 docs_to_move = in_progress_df[
-                                    (in_progress_df["製品名"] == selected_parent_customer) &
-                                    (in_progress_df["詳細"].isin(company_names_to_complete))
+                                    (in_progress_df["製品名"] == selected_parent_customer) & (in_progress_df["詳細"].isin(company_names_to_complete))
                                 ]
-                                
                                 for index, row in docs_to_move.iterrows():
                                     doc_data = row.to_dict(); doc_data['ステータス'] = '完了'
                                     doc_data['完了日時'] = firestore.SERVER_TIMESTAMP
@@ -2193,12 +2097,9 @@ def main_app():
                                     batch.delete(db.collection("in_progress").document(row['id']))
                             
                                 common_docs_to_move = in_progress_df[
-                                    (in_progress_df["製品名"] == selected_parent_customer) &
-                                    (in_progress_df["詳細"] == "")
+                                    (in_progress_df["製品名"] == selected_parent_customer) & (in_progress_df["詳細"] == "")
                                 ]
-                                
                                 remaining_companies = uncompleted_master_list[~uncompleted_master_list['会社名'].isin(company_names_to_complete)]
-                                
                                 if remaining_companies.empty:
                                     for index, common_row in common_docs_to_move.iterrows():
                                         doc_data = common_row.to_dict(); doc_data['ステータス'] = '完了'
@@ -2212,10 +2113,8 @@ def main_app():
                                 batch.update(db.collection("naire_master").document(item['id']), {"完了ステータス": "出荷待ち"})
                             
                             batch.commit()
-                            
                             load_from_firestore.clear()
                             load_tasks_for_customer.clear()
-                            
                             st.session_state.naire_reset_key += 1
                             st.session_state.success_msg = f"{len(checked_items)}件を「出荷待ち」に更新し、関連する作業記録を「完了」に移動しました。"
                             st.rerun()
@@ -2244,20 +2143,14 @@ if st.session_state.get('scroll_to_top', False):
     )
     st.session_state.scroll_to_top = False
 
-if 'submit_disabled' not in st.session_state:
-    st.session_state.submit_disabled = False
-
 def disable_buttons():
     st.session_state.submit_disabled = True
-
-if 'sub_view' not in st.session_state:
-    st.session_state.sub_view = 'SELECT_PROCESS'
 
 db = init_firebase()
 if not db:
     st.stop()
 
-# ★エラー対策: st.query_params の操作を安全な方法に変更
+# URLからIDを取得して自動ログインを試みる
 params = st.query_params.to_dict() if hasattr(st, 'query_params') else {}
 url_uid = params.get("uid")
 
@@ -2269,12 +2162,10 @@ if 'logged_in_user' not in st.session_state:
 
 if 'logged_in_user' in st.session_state:
     if st.session_state.get("just_logged_in"):
-        if hasattr(st, 'query_params'):
-            st.query_params["uid"] = WORKER_ID_MAP.get(st.session_state.logged_in_user, "")
+        if hasattr(st, 'query_params'): st.query_params["uid"] = WORKER_ID_MAP.get(st.session_state.logged_in_user, "")
         show_bookmark_page(st.session_state.logged_in_user)
     else:
-        if hasattr(st, 'query_params'):
-            st.query_params["uid"] = WORKER_ID_MAP.get(st.session_state.logged_in_user, "")
+        if hasattr(st, 'query_params'): st.query_params["uid"] = WORKER_ID_MAP.get(st.session_state.logged_in_user, "")
         main_app()
 else:
     login_screen()
