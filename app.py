@@ -430,7 +430,11 @@ def show_daily_report():
     t_tasks = pd.DataFrame()
     if not all_df.empty and '作成日時_dt' in all_df.columns:
         d_df = all_df[all_df['作成日時_dt'].dt.date == t_date]
-        if not d_df.empty: t_tasks = d_df[d_df.apply(lambda r: r.get('入力者名') == user or (user in r.get('共同作業者', [])) or (isinstance(r.get('共同作業者'), str) and user in r.get('共同作業者')), axis=1)].sort_values('作成日時_dt')
+       # ... existing code ...
+def show_daily_report():
+# ... existing code ...
+    if not d_df.empty: t_tasks = d_df[d_df.apply(lambda r: r.get('入力者名') == user or (isinstance(r.get('共同作業者'), list) and user in r.get('共同作業者')) or (isinstance(r.get('共同作業者'), str) and user in r.get('共同作業者')), axis=1)].sort_values('作成日時_dt')
+# ... existing code ...
 
     st.markdown(f"### 📋 作業履歴")
     if t_tasks.empty: st.info("この日の作業記録はありません。")
