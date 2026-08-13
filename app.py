@@ -12,7 +12,30 @@ import io
 from PIL import Image
 
 st.set_page_config(page_title="製本記録アプリ", layout="wide")
-st.markdown("""<style>input, textarea, select { font-size: 16px !important; }</style>""", unsafe_allow_html=True)
+
+# 修正箇所: ここでCSSを一度だけ定義します。
+st.markdown("""
+<style>
+input, textarea, select { font-size: 16px !important; }
+/* スマホ画面（幅600px以下）でボタンを横並びにするためのクラス */
+@media (max-width: 600px) {
+    .button-container-row > div {
+        display: flex;
+        flex-direction: row !important;
+        gap: 0.5rem;
+    }
+    .button-container-row > div > div {
+        width: 33.33% !important;
+    }
+    .button-container-row button {
+        width: 100% !important;
+        padding: 0.25rem 0.5rem !important;
+        font-size: 0.8rem !important;
+        min-height: 0px !important;
+    }
+}
+</style>
+""", unsafe_allow_html=True)
 components.html("""<script>const doc=window.parent.document; function d(){doc.querySelectorAll('div[data-baseweb="select"] input').forEach(i=>{if(i.getAttribute('inputmode')!=='none')i.setAttribute('inputmode','none');});} d(); new MutationObserver(d).observe(doc.body,{childList:true,subtree:true});</script>""", height=0, width=0)
 
 def clean_text(text):
@@ -791,20 +814,32 @@ def show_admin_dashboard():
                                 st.rerun()
                     except Exception as e:
                         st.error(f"更新中にエラーが発生しました: {e}")
-
 def render_step1(schedule_df, display_df, selected_location, product_to_location):
     st.markdown(f"<h3>Step 1: 新規工程を記録（{selected_location}）</h3>", unsafe_allow_html=True)
     f_sch = schedule_df[schedule_df['拠点'] == selected_location] if selected_location != "すべて" and not schedule_df.empty and '拠点' in schedule_df.columns else schedule_df.copy()
     c_names = sorted(f_sch['得意先名'].dropna().unique().tolist()) if not f_sch.empty and '得意先名' in f_sch.columns else []
     
-    sel_c = st.selectbox("得意先名で絞り込み", ["すべての得意先"] + c_names)
+    # 選択する得意先の初期値を決定
+    default_customer = "すべての得意先"
+    preselected_product = st.session_state.get('product_to_select', "")
+    if preselected_product and not f_sch.empty and '品名' in f_sch.columns:
+        match = f_sch[f_sch['品名'] == preselected_product]
+        if not match.empty:
+            customer = match.iloc[0].get('得意先名')
+            if pd.notna(customer) and customer in c_names:
+                default_customer = customer
+
+    sel_c = st.selectbox("得意先名で絞り込み", ["すべての得意先"] + c_names, index=(["すべての得意先"] + c_names).index(default_customer))
     with st.form("selection_form"):
         p_df = f_sch[f_sch['得意先名'] == sel_c] if sel_c != "すべての得意先" else f_sch.copy()
         s_prods = p_df['品名'].dropna().unique().tolist() if not p_df.empty and '品名' in p_df.columns else []
         i_prods = display_df['製品名'].unique().tolist() if not display_df.empty and '製品名' in display_df.columns else []
         opts = [""] + sorted(list(set(s_prods + i_prods)))
         
-        sel_p = st.selectbox("製品を選択", opts)
+        # product_to_select があれば初期値にセット
+        default_index = opts.index(preselected_product) if preselected_product in opts else 0
+        sel_p = st.selectbox("製品を選択", opts, index=default_index)
+        
         man_in = st.checkbox("リストにない製品を手入力")
         man_p = st.text_input("新しい製品名")
         sel_proc = st.selectbox("工程名", PROCESS_OPTIONS)
@@ -816,10 +851,13 @@ def render_step1(schedule_df, display_df, selected_location, product_to_location
                 st.session_state.selected_product = fin_p
                 st.session_state.selected_process = sel_proc
                 st.session_state.sub_view = 'INPUT_FORM'
+                # 処理が終わったらクリア
+                if 'product_to_select' in st.session_state: del st.session_state.product_to_select
                 st.rerun()
 
 def main_app():
-    if 'product_to_select' in st.session_state: del st.session_state.product_to_select
+    # 修正: メニュー切り替え時などに product_to_select を消さないようにここでの clear は削除
+    # if 'product_to_select' in st.session_state: del st.session_state.product_to_select
     if 'success_msg' in st.session_state: st.success(st.session_state.pop('success_msg'))
     
     st.sidebar.success(f"ログイン: **{st.session_state.logged_in_user}**")
@@ -927,16 +965,13 @@ def main_app():
                 if d_df.empty: 
                     st.info("作業中の製品はありません。")
                 else:
-                    # 予定表から納期情報を取得しやすくするための準備
                     schedule_lookup = {}
                     if not schedule_df.empty and '品名' in schedule_df.columns:
                         schedule_df['clean_品名_lookup'] = schedule_df['品名'].apply(clean_text)
                         for _, row in schedule_df.iterrows():
-                            # 同じ品名が複数ある場合は最後のものを採用する簡易版
                             schedule_lookup[row['clean_品名_lookup']] = row.get(SCHEDULE_COL_DUE_DATE, "")
 
                     for p, g in d_df.groupby('製品名'):
-                        # 納期情報の取得
                         due_date = schedule_lookup.get(clean_text(p), "")
                         due_badge = f" 📅 納期:{due_date}" if pd.notna(due_date) and str(due_date).strip() != "" else ""
 
@@ -945,7 +980,6 @@ def main_app():
                             if c1.button("工程追加", key=f"a_{p}"): st.session_state.product_to_select, st.session_state.scroll_to_top = p, True; st.rerun()
                             if c2.button("完了", key=f"c_{p}", type="primary"): handle_product_completion(p)
                             for _, r in g.iterrows():
-                                # 作業日時の取得 (作成日時から取得)
                                 work_date_str = ""
                                 if '作成日時' in r and pd.notna(r['作成日時']):
                                     try:
@@ -956,16 +990,18 @@ def main_app():
                                 start_t = r.get('開始時間', '')
                                 time_badge = f"🕒 {work_date_str} {start_t}~" if start_t else f"🕒 {work_date_str}"
 
-                                st.caption(f"{time_badge} | {r['工程名']} / 出来数: {r['出来数']}個 / 👤 {r.get('入力者名','')}")
+                                st.caption(f"{time_badge} | {r['工程名']} / 出来数: {r['出来数']}個 / 入力: {r.get('入力者名','')}")
                                 
-                                # ボタンを横並びにするためのカスタムHTML/CSSを利用したコンパクト配置 (Streamlit標準のcolumnsはスマホで縦になるため)
-                                # Streamlitの仕様上、完全に横並びにするのは難しいため、可能な限り幅を狭めたcolumnsを使用
+                                # 修正箇所: ここでループ内にCSSを埋め込むのをやめ、シンプルにクラスだけ適用します。
+                                st.markdown('<div class="button-container-row">', unsafe_allow_html=True)
                                 cx, cy, cz = st.columns([1, 1, 1])
                                 if cx.button("編集", key=f"e_{r['id']}", use_container_width=True): st.session_state.record_to_edit, st.session_state.sub_view = r.to_dict(), 'EDIT_FORM'; st.rerun()
                                 if cy.button("続き", key=f"cp_{r['id']}", use_container_width=True): 
                                     d = r.to_dict(); d['開始時間'] = d['終了時間'] = ""; d['出来数'] = 0; d.pop('id', None)
                                     st.session_state.record_to_copy, st.session_state.sub_view = d, 'INPUT_FORM'; st.rerun()
                                 if cz.button("削除", key=f"d_{r['id']}", use_container_width=True): db.collection("in_progress").document(r['id']).delete(); load_from_firestore.clear(); st.rerun()
+                                st.markdown('</div>', unsafe_allow_html=True)
+                                
                                 st.divider()
     elif main_view == "📅 カレンダー一括管理":
         in_progress_df = load_from_firestore(db, "in_progress")
@@ -1106,14 +1142,17 @@ def main_app():
                                 dtls = r.get('詳細', '')
                                 dtl_str = f" - {dtls}" if dtls else ""
                                 st.caption(f"{r['工程名']}{dtl_str} / 出来数: {r['出来数']}個 / 入力: {r.get('入力者名','')}")
+                                
+                                # 修正箇所: ここも同様にシンプルにクラスだけ適用します。
+                                st.markdown('<div class="button-container-row">', unsafe_allow_html=True)
                                 cx, cy, cz = st.columns(3)
-                                if cx.button("編集", key=f"e_cal_{r['id']}"): st.session_state.cal_record_to_edit, st.session_state.cal_sub_view = r.to_dict(), 'EDIT_FORM'; st.rerun()
-                                if cy.button("続き", key=f"cp_cal_{r['id']}"): 
+                                if cx.button("編集", key=f"e_cal_{r['id']}", use_container_width=True): st.session_state.cal_record_to_edit, st.session_state.cal_sub_view = r.to_dict(), 'EDIT_FORM'; st.rerun()
+                                if cy.button("続き", key=f"cp_cal_{r['id']}", use_container_width=True): 
                                     d = r.to_dict(); d['開始時間'] = d['終了時間'] = ""; d['出来数'] = 0; d.pop('id', None)
                                     st.session_state.cal_record_to_copy, st.session_state.cal_sub_view = d, 'INPUT_FORM'; st.rerun()
-                                if cz.button("削除", key=f"d_cal_{r['id']}"): db.collection("in_progress").document(r['id']).delete(); load_from_firestore.clear(); st.rerun()
+                                if cz.button("削除", key=f"d_cal_{r['id']}", use_container_width=True): db.collection("in_progress").document(r['id']).delete(); load_from_firestore.clear(); st.rerun()
+                                st.markdown('</div>', unsafe_allow_html=True)
                                 st.divider()
-                                
     elif main_view == "📦 名入れ一括登録":
         st.header("名入れ工程の進捗管理")
         with st.spinner("名入れマスタを読み込んでいます..."):
@@ -1351,7 +1390,12 @@ def main_app():
         show_admin_dashboard()
 
 st.markdown("<h1>📘 製本記録アプリ</h1>", unsafe_allow_html=True)
-if st.session_state.get('scroll_to_top'): components.html("<script>window.scrollTo(0,0);</script>", height=0); st.session_state.scroll_to_top = False
+
+# 修正箇所: window.parent.scrollTo を使用して、スマホの画面全体を確実に一番上までスムーズにスクロールさせます。
+if st.session_state.get('scroll_to_top'):
+    components.html("<script>window.parent.scrollTo({top: 0, behavior: 'smooth'});</script>", height=0, width=0)
+    st.session_state.scroll_to_top = False
+
 db = init_firebase()
 if not db: st.stop()
 if 'logged_in_user' not in st.session_state:
