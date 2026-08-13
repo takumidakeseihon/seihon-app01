@@ -927,21 +927,46 @@ def main_app():
                 if d_df.empty: 
                     st.info("作業中の製品はありません。")
                 else:
+                    # 予定表から納期情報を取得しやすくするための準備
+                    schedule_lookup = {}
+                    if not schedule_df.empty and '品名' in schedule_df.columns:
+                        schedule_df['clean_品名_lookup'] = schedule_df['品名'].apply(clean_text)
+                        for _, row in schedule_df.iterrows():
+                            # 同じ品名が複数ある場合は最後のものを採用する簡易版
+                            schedule_lookup[row['clean_品名_lookup']] = row.get(SCHEDULE_COL_DUE_DATE, "")
+
                     for p, g in d_df.groupby('製品名'):
-                        with st.expander(f"**{p}**"):
+                        # 納期情報の取得
+                        due_date = schedule_lookup.get(clean_text(p), "")
+                        due_badge = f" 📅 納期:{due_date}" if pd.notna(due_date) and str(due_date).strip() != "" else ""
+
+                        with st.expander(f"**{p}**{due_badge}"):
                             c1, c2 = st.columns(2)
                             if c1.button("工程追加", key=f"a_{p}"): st.session_state.product_to_select, st.session_state.scroll_to_top = p, True; st.rerun()
                             if c2.button("完了", key=f"c_{p}", type="primary"): handle_product_completion(p)
                             for _, r in g.iterrows():
-                                st.caption(f"{r['工程名']} / 出来数: {r['出来数']}個 / 入力: {r.get('入力者名','')}")
-                                cx, cy, cz = st.columns(3)
-                                if cx.button("編集", key=f"e_{r['id']}"): st.session_state.record_to_edit, st.session_state.sub_view = r.to_dict(), 'EDIT_FORM'; st.rerun()
-                                if cy.button("続き", key=f"cp_{r['id']}"): 
+                                # 作業日時の取得 (作成日時から取得)
+                                work_date_str = ""
+                                if '作成日時' in r and pd.notna(r['作成日時']):
+                                    try:
+                                        dt = pd.to_datetime(r['作成日時']).tz_convert('Asia/Tokyo')
+                                        work_date_str = dt.strftime('%m/%d')
+                                    except:
+                                        pass
+                                start_t = r.get('開始時間', '')
+                                time_badge = f"🕒 {work_date_str} {start_t}~" if start_t else f"🕒 {work_date_str}"
+
+                                st.caption(f"{time_badge} | {r['工程名']} / 出来数: {r['出来数']}個 / 👤 {r.get('入力者名','')}")
+                                
+                                # ボタンを横並びにするためのカスタムHTML/CSSを利用したコンパクト配置 (Streamlit標準のcolumnsはスマホで縦になるため)
+                                # Streamlitの仕様上、完全に横並びにするのは難しいため、可能な限り幅を狭めたcolumnsを使用
+                                cx, cy, cz = st.columns([1, 1, 1])
+                                if cx.button("編集", key=f"e_{r['id']}", use_container_width=True): st.session_state.record_to_edit, st.session_state.sub_view = r.to_dict(), 'EDIT_FORM'; st.rerun()
+                                if cy.button("続き", key=f"cp_{r['id']}", use_container_width=True): 
                                     d = r.to_dict(); d['開始時間'] = d['終了時間'] = ""; d['出来数'] = 0; d.pop('id', None)
                                     st.session_state.record_to_copy, st.session_state.sub_view = d, 'INPUT_FORM'; st.rerun()
-                                if cz.button("削除", key=f"d_{r['id']}"): db.collection("in_progress").document(r['id']).delete(); load_from_firestore.clear(); st.rerun()
+                                if cz.button("削除", key=f"d_{r['id']}", use_container_width=True): db.collection("in_progress").document(r['id']).delete(); load_from_firestore.clear(); st.rerun()
                                 st.divider()
-                                
     elif main_view == "📅 カレンダー一括管理":
         in_progress_df = load_from_firestore(db, "in_progress")
         st.session_state.in_progress_df = in_progress_df
