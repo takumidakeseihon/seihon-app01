@@ -12,7 +12,30 @@ import io
 from PIL import Image
 
 st.set_page_config(page_title="製本記録アプリ", layout="wide")
-st.markdown("""<style>input, textarea, select { font-size: 16px !important; }</style>""", unsafe_allow_html=True)
+
+# 修正箇所: ここでCSSを一度だけ定義します。
+st.markdown("""
+<style>
+input, textarea, select { font-size: 16px !important; }
+/* スマホ画面（幅600px以下）でボタンを横並びにするためのクラス */
+@media (max-width: 600px) {
+    .button-container-row > div {
+        display: flex;
+        flex-direction: row !important;
+        gap: 0.5rem;
+    }
+    .button-container-row > div > div {
+        width: 33.33% !important;
+    }
+    .button-container-row button {
+        width: 100% !important;
+        padding: 0.25rem 0.5rem !important;
+        font-size: 0.8rem !important;
+        min-height: 0px !important;
+    }
+}
+</style>
+""", unsafe_allow_html=True)
 components.html("""<script>const doc=window.parent.document; function d(){doc.querySelectorAll('div[data-baseweb="select"] input').forEach(i=>{if(i.getAttribute('inputmode')!=='none')i.setAttribute('inputmode','none');});} d(); new MutationObserver(d).observe(doc.body,{childList:true,subtree:true});</script>""", height=0, width=0)
 
 def clean_text(text):
@@ -954,42 +977,15 @@ def main_app():
 
                                 st.caption(f"{time_badge} | {r['工程名']} / 出来数: {r['出来数']}個 / 入力: {r.get('入力者名','')}")
                                 
-                                # CSSで強制的に横並びにするためのコンテナ
-                                st.markdown("""
-                                    <style>
-                                    [data-testid="stHorizontalBlock"] {
-                                        align-items: center;
-                                    }
-                                    @media (max-width: 600px) {
-                                        .button-container-row > div {
-                                            display: flex;
-                                            flex-direction: row !important;
-                                            gap: 0.5rem;
-                                        }
-                                        .button-container-row > div > div {
-                                            width: 33.33% !important;
-                                        }
-                                        .button-container-row button {
-                                            width: 100% !important;
-                                            padding: 0.25rem 0.5rem !important;
-                                            font-size: 0.8rem !important;
-                                            min-height: 0px !important;
-                                        }
-                                    }
-                                    </style>
-                                """, unsafe_allow_html=True)
-
-                                # カスタムCSSクラスを適用するためのラッパー
-                                btn_container = st.container()
-                                with btn_container:
-                                    st.markdown('<div class="button-container-row">', unsafe_allow_html=True)
-                                    cx, cy, cz = st.columns([1, 1, 1])
-                                    if cx.button("編集", key=f"e_{r['id']}", use_container_width=True): st.session_state.record_to_edit, st.session_state.sub_view = r.to_dict(), 'EDIT_FORM'; st.rerun()
-                                    if cy.button("続き", key=f"cp_{r['id']}", use_container_width=True): 
-                                        d = r.to_dict(); d['開始時間'] = d['終了時間'] = ""; d['出来数'] = 0; d.pop('id', None)
-                                        st.session_state.record_to_copy, st.session_state.sub_view = d, 'INPUT_FORM'; st.rerun()
-                                    if cz.button("削除", key=f"d_{r['id']}", use_container_width=True): db.collection("in_progress").document(r['id']).delete(); load_from_firestore.clear(); st.rerun()
-                                    st.markdown('</div>', unsafe_allow_html=True)
+                                # 修正箇所: ここでループ内にCSSを埋め込むのをやめ、シンプルにクラスだけ適用します。
+                                st.markdown('<div class="button-container-row">', unsafe_allow_html=True)
+                                cx, cy, cz = st.columns([1, 1, 1])
+                                if cx.button("編集", key=f"e_{r['id']}", use_container_width=True): st.session_state.record_to_edit, st.session_state.sub_view = r.to_dict(), 'EDIT_FORM'; st.rerun()
+                                if cy.button("続き", key=f"cp_{r['id']}", use_container_width=True): 
+                                    d = r.to_dict(); d['開始時間'] = d['終了時間'] = ""; d['出来数'] = 0; d.pop('id', None)
+                                    st.session_state.record_to_copy, st.session_state.sub_view = d, 'INPUT_FORM'; st.rerun()
+                                if cz.button("削除", key=f"d_{r['id']}", use_container_width=True): db.collection("in_progress").document(r['id']).delete(); load_from_firestore.clear(); st.rerun()
+                                st.markdown('</div>', unsafe_allow_html=True)
                                 
                                 st.divider()
     elif main_view == "📅 カレンダー一括管理":
@@ -1132,17 +1128,15 @@ def main_app():
                                 dtl_str = f" - {dtls}" if dtls else ""
                                 st.caption(f"{r['工程名']}{dtl_str} / 出来数: {r['出来数']}個 / 入力: {r.get('入力者名','')}")
                                 
-                                # カスタムCSSクラスを適用するためのラッパー (カレンダー版)
-                                btn_container_cal = st.container()
-                                with btn_container_cal:
-                                    st.markdown('<div class="button-container-row">', unsafe_allow_html=True)
-                                    cx, cy, cz = st.columns(3)
-                                    if cx.button("編集", key=f"e_cal_{r['id']}", use_container_width=True): st.session_state.cal_record_to_edit, st.session_state.cal_sub_view = r.to_dict(), 'EDIT_FORM'; st.rerun()
-                                    if cy.button("続き", key=f"cp_cal_{r['id']}", use_container_width=True): 
-                                        d = r.to_dict(); d['開始時間'] = d['終了時間'] = ""; d['出来数'] = 0; d.pop('id', None)
-                                        st.session_state.cal_record_to_copy, st.session_state.cal_sub_view = d, 'INPUT_FORM'; st.rerun()
-                                    if cz.button("削除", key=f"d_cal_{r['id']}", use_container_width=True): db.collection("in_progress").document(r['id']).delete(); load_from_firestore.clear(); st.rerun()
-                                    st.markdown('</div>', unsafe_allow_html=True)
+                                # 修正箇所: ここも同様にシンプルにクラスだけ適用します。
+                                st.markdown('<div class="button-container-row">', unsafe_allow_html=True)
+                                cx, cy, cz = st.columns(3)
+                                if cx.button("編集", key=f"e_cal_{r['id']}", use_container_width=True): st.session_state.cal_record_to_edit, st.session_state.cal_sub_view = r.to_dict(), 'EDIT_FORM'; st.rerun()
+                                if cy.button("続き", key=f"cp_cal_{r['id']}", use_container_width=True): 
+                                    d = r.to_dict(); d['開始時間'] = d['終了時間'] = ""; d['出来数'] = 0; d.pop('id', None)
+                                    st.session_state.cal_record_to_copy, st.session_state.cal_sub_view = d, 'INPUT_FORM'; st.rerun()
+                                if cz.button("削除", key=f"d_cal_{r['id']}", use_container_width=True): db.collection("in_progress").document(r['id']).delete(); load_from_firestore.clear(); st.rerun()
+                                st.markdown('</div>', unsafe_allow_html=True)
                                 st.divider()
     elif main_view == "📦 名入れ一括登録":
         st.header("名入れ工程の進捗管理")
