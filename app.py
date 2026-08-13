@@ -1092,11 +1092,25 @@ def main_app():
                                 st.success(f"{len(target_items)}件の名入れ先（費用項目を除外済）が見つかりました。")
                                 
                                 st.write("対象会社リスト（チェックして一括処理）")
+                                col1_sel, col2_sel, _ = st.columns([1, 1, 2])
+                                if col1_sel.button("すべて選択", key="cal_sel_all"):
+                                    for comp in target_items.keys():
+                                        st.session_state[f"cal_chk_{comp}"] = True
+                                    st.rerun()
+                                if col2_sel.button("すべて解除", key="cal_desel_all"):
+                                    for comp in target_items.keys():
+                                        st.session_state[f"cal_chk_{comp}"] = False
+                                    st.rerun()
+
                                 checked_comps = []
                                 is_single_item = (len(target_items) == 1)
                                 for comp, info in target_items.items():
                                     qty_str = f" （{info['数量']:,}部）" if info['数量'] > 0 else ""
-                                    if st.checkbox(f"{comp}{qty_str}", key=f"cal_chk_{comp}", value=is_single_item):
+                                    
+                                    if f"cal_chk_{comp}" not in st.session_state:
+                                        st.session_state[f"cal_chk_{comp}"] = is_single_item
+                                        
+                                    if st.checkbox(f"{comp}{qty_str}", key=f"cal_chk_{comp}"):
                                         checked_comps.append(info)
                                 
                                 sel_proc = st.selectbox("一括登録する工程", CALENDAR_PROCESS_OPTIONS)
