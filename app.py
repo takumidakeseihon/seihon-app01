@@ -814,20 +814,32 @@ def show_admin_dashboard():
                                 st.rerun()
                     except Exception as e:
                         st.error(f"更新中にエラーが発生しました: {e}")
-
 def render_step1(schedule_df, display_df, selected_location, product_to_location):
     st.markdown(f"<h3>Step 1: 新規工程を記録（{selected_location}）</h3>", unsafe_allow_html=True)
     f_sch = schedule_df[schedule_df['拠点'] == selected_location] if selected_location != "すべて" and not schedule_df.empty and '拠点' in schedule_df.columns else schedule_df.copy()
     c_names = sorted(f_sch['得意先名'].dropna().unique().tolist()) if not f_sch.empty and '得意先名' in f_sch.columns else []
     
-    sel_c = st.selectbox("得意先名で絞り込み", ["すべての得意先"] + c_names)
+    # 選択する得意先の初期値を決定
+    default_customer = "すべての得意先"
+    preselected_product = st.session_state.get('product_to_select', "")
+    if preselected_product and not f_sch.empty and '品名' in f_sch.columns:
+        match = f_sch[f_sch['品名'] == preselected_product]
+        if not match.empty:
+            customer = match.iloc[0].get('得意先名')
+            if pd.notna(customer) and customer in c_names:
+                default_customer = customer
+
+    sel_c = st.selectbox("得意先名で絞り込み", ["すべての得意先"] + c_names, index=(["すべての得意先"] + c_names).index(default_customer))
     with st.form("selection_form"):
         p_df = f_sch[f_sch['得意先名'] == sel_c] if sel_c != "すべての得意先" else f_sch.copy()
         s_prods = p_df['品名'].dropna().unique().tolist() if not p_df.empty and '品名' in p_df.columns else []
         i_prods = display_df['製品名'].unique().tolist() if not display_df.empty and '製品名' in display_df.columns else []
         opts = [""] + sorted(list(set(s_prods + i_prods)))
         
-        sel_p = st.selectbox("製品を選択", opts)
+        # product_to_select があれば初期値にセット
+        default_index = opts.index(preselected_product) if preselected_product in opts else 0
+        sel_p = st.selectbox("製品を選択", opts, index=default_index)
+        
         man_in = st.checkbox("リストにない製品を手入力")
         man_p = st.text_input("新しい製品名")
         sel_proc = st.selectbox("工程名", PROCESS_OPTIONS)
@@ -839,10 +851,13 @@ def render_step1(schedule_df, display_df, selected_location, product_to_location
                 st.session_state.selected_product = fin_p
                 st.session_state.selected_process = sel_proc
                 st.session_state.sub_view = 'INPUT_FORM'
+                # 処理が終わったらクリア
+                if 'product_to_select' in st.session_state: del st.session_state.product_to_select
                 st.rerun()
 
 def main_app():
-    if 'product_to_select' in st.session_state: del st.session_state.product_to_select
+    # 修正: メニュー切り替え時などに product_to_select を消さないようにここでの clear は削除
+    # if 'product_to_select' in st.session_state: del st.session_state.product_to_select
     if 'success_msg' in st.session_state: st.success(st.session_state.pop('success_msg'))
     
     st.sidebar.success(f"ログイン: **{st.session_state.logged_in_user}**")
