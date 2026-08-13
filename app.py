@@ -1390,7 +1390,12 @@ def main_app():
         show_admin_dashboard()
 
 st.markdown("<h1>📘 製本記録アプリ</h1>", unsafe_allow_html=True)
-if st.session_state.get('scroll_to_top'): components.html("<script>window.scrollTo(0,0);</script>", height=0); st.session_state.scroll_to_top = False
+
+# 修正箇所: window.parent.scrollTo を使用して、スマホの画面全体を確実に一番上までスムーズにスクロールさせます。
+if st.session_state.get('scroll_to_top'):
+    components.html("<script>window.parent.scrollTo({top: 0, behavior: 'smooth'});</script>", height=0, width=0)
+    st.session_state.scroll_to_top = False
+
 db = init_firebase()
 if not db: st.stop()
 if 'logged_in_user' not in st.session_state:
