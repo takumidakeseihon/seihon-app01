@@ -833,8 +833,15 @@ def render_step1(schedule_df, display_df, selected_location, product_to_location
     with st.form("selection_form"):
         p_df = f_sch[f_sch['得意先名'] == sel_c] if sel_c != "すべての得意先" else f_sch.copy()
         s_prods = p_df['品名'].dropna().unique().tolist() if not p_df.empty and '品名' in p_df.columns else []
-        i_prods = display_df['製品名'].unique().tolist() if not display_df.empty and '製品名' in display_df.columns else []
-        opts = [""] + sorted(list(set(s_prods + i_prods)))
+        
+        if sel_c != "すべての得意先":
+            opts = [""] + sorted(list(set(s_prods)))
+        else:
+            i_prods = display_df['製品名'].unique().tolist() if not display_df.empty and '製品名' in display_df.columns else []
+            opts = [""] + sorted(list(set(s_prods + i_prods)))
+            
+        if preselected_product and preselected_product not in opts:
+            opts.append(preselected_product)
         
         # product_to_select があれば初期値にセット
         default_index = opts.index(preselected_product) if preselected_product in opts else 0
