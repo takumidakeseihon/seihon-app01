@@ -1029,8 +1029,8 @@ def main_app():
             
             c_left, c_right = st.columns([1.3, 1])
             with c_left:
-                if sch.empty or sch_m.empty: 
-                    st.warning("予定表CSV または schedule_m.csv が読み込めません。（サイドバーからアップロードしてください）")
+                if sch.empty: 
+                    st.warning("予定表CSV が読み込めません。（サイドバーからアップロードしてください）")
                 else:
                     cal_sch = sch[sch[SCHEDULE_COL_DETAILS].astype(str).str.contains('カレンダー', na=False)] if SCHEDULE_COL_DETAILS in sch.columns else pd.DataFrame()
                     if cal_sch.empty: 
