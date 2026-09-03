@@ -7,6 +7,7 @@ import firebase_admin
 from firebase_admin import credentials, firestore
 import json
 import os
+import re
 import base64
 import io
 from PIL import Image
@@ -40,6 +41,14 @@ components.html("""<script>const doc=window.parent.document; function d(){doc.qu
 def clean_text(text):
     if pd.isna(text): return ""
     return unicodedata.normalize('NFKC', str(text)).strip().replace(' ', '').replace('　', '')
+
+def convert_gdrive_url(url):
+    """Googleドライブの閲覧用URLを直接ダウンロード用URLに変換する"""
+    if url and "drive.google.com" in url:
+        match = re.search(r'/d/([a-zA-Z0-9_-]+)', url)
+        if match:
+            return f"https://drive.google.com/uc?export=download&id={match.group(1)}"
+    return url
 
 SCHEDULE_FILE = "schedule.csv"
 SCHEDULE_M_FILE = "schedule_m.csv"
@@ -113,19 +122,42 @@ def load_csv_data(file_path):
     if file_path == SCHEDULE_M_FILE and 'manual_schedule_m_df' in st.session_state: return st.session_state.manual_schedule_m_df
     
     target_path = file_path
-    # URL設定がある場合
-    if file_path == SCHEDULE_FILE and "SCHEDULE_CSV_URL" in st.secrets and st.secrets["SCHEDULE_CSV_URL"]:
-        target_path = st.secrets["SCHEDULE_CSV_URL"]
-    elif file_path == SCHEDULE_M_FILE and "SCHEDULE_M_CSV_URL" in st.secrets and st.secrets["SCHEDULE_M_CSV_URL"]:
-        target_path = st.secrets["SCHEDULE_M_CSV_URL"]
+    is_url = False
     
-    # エンコーディングのフォールバック（URLでもローカルでもShift-JIS等の文字化けに対応）
+    # URL設定がある場合 (Google Drive等のURLを直接ダウンロード用に変換)
+    if file_path == SCHEDULE_FILE and "SCHEDULE_CSV_URL" in st.secrets and st.secrets["SCHEDULE_CSV_URL"]:
+        target_path = convert_gdrive_url(st.secrets["SCHEDULE_CSV_URL"])
+        is_url = True
+    elif file_path == SCHEDULE_M_FILE and "SCHEDULE_M_CSV_URL" in st.secrets and st.secrets["SCHEDULE_M_CSV_URL"]:
+        target_path = convert_gdrive_url(st.secrets["SCHEDULE_M_CSV_URL"])
+        is_url = True
+        
+    error_details = []
+    
+    # ローカルファイル(URLではない)の場合、ファイルの存在確認を行う
+    if not is_url and not os.path.exists(target_path):
+        if file_path == SCHEDULE_M_FILE:
+            st.session_state.m_file_error_msg = f"ローカルにファイルが見つかりません: {os.path.abspath(target_path)} （ファイル名が合っているか確認してください）"
+        return pd.DataFrame()
+
+    # エンコーディングのフォールバック
     for enc in ["utf-8-sig", "cp932", "shift_jis", "utf-8", "mac_japanese"]:
         try: 
             df = pd.read_csv(target_path, encoding=enc)
-            if not df.empty: return df
-        except Exception: 
+            if not df.empty: 
+                # 成功したらエラーメッセージをクリア
+                if file_path == SCHEDULE_M_FILE and 'm_file_error_msg' in st.session_state:
+                    del st.session_state.m_file_error_msg
+                return df
+        except Exception as e: 
+            error_details.append(f"{enc}: {type(e).__name__}")
             continue
+            
+    # すべてのエンコーディングで失敗した場合
+    if file_path == SCHEDULE_M_FILE:
+        path_type = "URL" if is_url else "ローカルファイル"
+        st.session_state.m_file_error_msg = f"{path_type} ({target_path}) の読み込みに失敗しました。詳細: {', '.join(error_details)}"
+        
     return pd.DataFrame()
 
 @st.cache_data(ttl=600)
@@ -360,7 +392,7 @@ def process_form(is_edit_mode=False, default_data=None, view_key='sub_view', is_
                     b = firestore.client().batch()
                     for i, item in enumerate(bulk_items):
                         item_qty = int(item.get('出来数', 0))
-                        # 部数による按分計算（合計が0の場合は0とする）
+                        # 全工程で部数による按分計算（合計が0の場合は0とする）
                         wm_per = int(wm * (item_qty / total_bulk_qty)) if total_bulk_qty > 0 and wm > 0 else 0
                         f = base_f_data.copy()
                         f.update({
@@ -825,7 +857,7 @@ def show_admin_dashboard():
                                     update_data = {"製品名": final_target}
                                     if target_detail:
                                         update_data["詳細"] = target_detail.strip()
-                                        update_data["is_calendar"] = True
+                                        update_data["is_calendar"] = True # カレンダーとして強制認識させる
                                         
                                     batch.update(doc_ref, update_data)
                                     update_count += 1
@@ -890,7 +922,7 @@ def main_app():
     
     st.sidebar.success(f"ログイン: **{st.session_state.logged_in_user}**")
     if st.sidebar.button("ログアウト"): st.session_state.clear(); st.rerun()
-    st.sidebar.button("データ更新", on_click=lambda: (load_from_firestore.clear(), load_tasks_for_customer.clear()), use_container_width=True)
+    st.sidebar.button("データ更新", on_click=lambda: (load_from_firestore.clear(), load_tasks_for_customer.clear(), load_csv_data.clear()), use_container_width=True)
     
     with st.sidebar.expander("🛠️ 管理者メニュー"):
         st.markdown("**■ 予定表の手動アップロード**")
@@ -929,6 +961,7 @@ def main_app():
                     
             if success_count > 0:
                 st.success(f"✅ {success_count}個のファイルを適用しました！")
+                if 'm_file_error_msg' in st.session_state: del st.session_state.m_file_error_msg
                 load_csv_data.clear()
                 st.rerun()
         st.divider()
@@ -1079,11 +1112,11 @@ def main_app():
             c_left, c_right = st.columns([1.3, 1])
             with c_left:
                 if sch.empty: 
-                    st.warning("予定表CSV が読み込めません。（サイドバーからアップロードしてください）")
+                    st.warning("予定表(schedule.csv) が読み込めません。")
                 else:
                     if sch_m.empty:
                         err_msg = st.session_state.get('m_file_error_msg', '原因不明')
-                        st.error(f"⚠️ 【警告】明細データ(schedule_m.csv) が読み込めていません！\n\n**【詳細な原因】**: {err_msg}\n\n※サイドバーの「データ更新」ボタンを押すか、手動アップロードを試してください。")
+                        st.error(f"⚠️ 【警告】明細データ(schedule_m.csv) が読み込めていません！\n\n**【詳細な原因】**\n{err_msg}\n\n※ファイルが同じフォルダにあるか、ファイル名が正しいかを確認してください。")
                         
                     cal_sch = sch[sch[SCHEDULE_COL_DETAILS].astype(str).str.contains('カレンダー', na=False)] if SCHEDULE_COL_DETAILS in sch.columns else pd.DataFrame()
                     if cal_sch.empty: 
@@ -1134,31 +1167,18 @@ def main_app():
                             # --- 明細(名入れ)の取得処理 ---
                             t_m = pd.DataFrame()
                             if not sch_m.empty:
-                                # 検索アプローチ1: 伝票番号（A列目）を確実に文字列として一致させる
-                                denpyo_val = str(parent_row.iloc[0]).strip().replace('.0', '')
-                                if denpyo_val and denpyo_val != 'nan':
-                                    sch_m['clean_denpyo'] = sch_m.iloc[:, 0].astype(str).str.strip().str.replace('.0', '', regex=False)
-                                    t_m = sch_m[sch_m['clean_denpyo'] == denpyo_val]
+                                denpyo_col = next((col for col in sch.columns if '伝票' in col), sch.columns[0] if not sch.empty else None)
+                                denpyo_m_col = next((col for col in sch_m.columns if '伝票' in col), sch_m.columns[0] if not sch_m.empty else None)
                                 
-                                # 検索アプローチ2: もし伝票番号でヒットしなければ、品名が含まれている行を探し、その行の伝票番号をベースに探す
-                                if t_m.empty and '品名' in sch_m.columns:
-                                    match_by_name = sch_m[sch_m['品名'].astype(str).str.contains(p_prod, na=False, regex=False)]
-                                    if not match_by_name.empty:
-                                        guess_denpyo = str(match_by_name.iloc[0, 0]).strip().replace('.0', '')
-                                        t_m = sch_m[sch_m['clean_denpyo'] == guess_denpyo]
-                                
-                                # 検索アプローチ3: それでもダメなら、得意先名で強引に抽出
-                                if t_m.empty and '得意先名' in sch_m.columns and '得意先名' in parent_row:
-                                    cust_name = parent_row['得意先名']
-                                    if pd.notna(cust_name):
-                                        t_m = sch_m[sch_m['得意先名'] == cust_name]
+                                if denpyo_col and denpyo_m_col:
+                                    d_val = parent_row.get(denpyo_col)
+                                    if pd.notna(d_val):
+                                        t_m = sch_m[sch_m[denpyo_m_col] == d_val]
                             
                             target_items = {}
                             if not t_m.empty:
-                                # 内容コード「9」（全角・半角・小数対応）のものを名入れとして抽出
                                 if '内容コード' in t_m.columns:
-                                    t_m['clean_code'] = t_m['内容コード'].astype(str).str.strip().str.translate(str.maketrans('０１２３４５６７８９', '0123456789')).str.replace('.0', '', regex=False)
-                                    naire_df = t_m[t_m['clean_code'] == '9']
+                                    naire_df = t_m[(t_m['内容コード'].astype(str).str.strip().str.replace('.0', '', regex=False) == '9') | (t_m['内容コード'] == 9)]
                                     
                                     for _, row in naire_df.iterrows():
                                         content_col = next((c for c in t_m.columns if c == '内容'), None)
