@@ -1082,7 +1082,8 @@ def main_app():
                     st.warning("予定表CSV が読み込めません。（サイドバーからアップロードしてください）")
                 else:
                     if sch_m.empty:
-                        st.error("⚠️ 【警告】明細データ(schedule_m.csv) が読み込めていません！そのため名入れを検索できず単体登録になります。文字コードの問題か、ファイルが存在しない可能性があります。サイドバーから手動アップロードを試してください。")
+                        err_msg = st.session_state.get('m_file_error_msg', '原因不明')
+                        st.error(f"⚠️ 【警告】明細データ(schedule_m.csv) が読み込めていません！\n\n**【詳細な原因】**: {err_msg}\n\n※サイドバーの「データ更新」ボタンを押すか、手動アップロードを試してください。")
                         
                     cal_sch = sch[sch[SCHEDULE_COL_DETAILS].astype(str).str.contains('カレンダー', na=False)] if SCHEDULE_COL_DETAILS in sch.columns else pd.DataFrame()
                     if cal_sch.empty: 
