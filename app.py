@@ -112,22 +112,19 @@ def load_csv_data(file_path):
     if file_path == SCHEDULE_FILE and 'manual_schedule_df' in st.session_state: return st.session_state.manual_schedule_df
     if file_path == SCHEDULE_M_FILE and 'manual_schedule_m_df' in st.session_state: return st.session_state.manual_schedule_m_df
     
+    target_path = file_path
     # URL設定がある場合
     if file_path == SCHEDULE_FILE and "SCHEDULE_CSV_URL" in st.secrets and st.secrets["SCHEDULE_CSV_URL"]:
-        try: return pd.read_csv(st.secrets["SCHEDULE_CSV_URL"], encoding="utf-8-sig")
-        except: pass 
+        target_path = st.secrets["SCHEDULE_CSV_URL"]
+    elif file_path == SCHEDULE_M_FILE and "SCHEDULE_M_CSV_URL" in st.secrets and st.secrets["SCHEDULE_M_CSV_URL"]:
+        target_path = st.secrets["SCHEDULE_M_CSV_URL"]
     
-    # 改善箇所：schedule_m.csv 用のURL設定（SCHEDULE_M_CSV_URL）も読み込めるように追加
-    if file_path == SCHEDULE_M_FILE and "SCHEDULE_M_CSV_URL" in st.secrets and st.secrets["SCHEDULE_M_CSV_URL"]:
-        try: return pd.read_csv(st.secrets["SCHEDULE_M_CSV_URL"], encoding="utf-8-sig")
-        except: pass 
-    
-    # エンコーディングのフォールバック（Excel出力のShift-JIS対策）
+    # エンコーディングのフォールバック（URLでもローカルでもShift-JIS等の文字化けに対応）
     for enc in ["utf-8-sig", "cp932", "shift_jis", "utf-8", "mac_japanese"]:
         try: 
-            df = pd.read_csv(file_path, encoding=enc)
+            df = pd.read_csv(target_path, encoding=enc)
             if not df.empty: return df
-        except: 
+        except Exception: 
             continue
     return pd.DataFrame()
 
