@@ -355,14 +355,17 @@ def process_form(is_edit_mode=False, default_data=None, view_key='sub_view', is_
             }
             
             if is_bulk:
-                wm_per = int(wm / len(bulk_items)) if wm > 0 else 0
+                total_bulk_qty = sum(int(item.get('出来数', 0)) for item in bulk_items)
                 def op():
                     b = firestore.client().batch()
                     for i, item in enumerate(bulk_items):
+                        item_qty = int(item.get('出来数', 0))
+                        # 部数による按分計算（合計が0の場合は0とする）
+                        wm_per = int(wm * (item_qty / total_bulk_qty)) if total_bulk_qty > 0 and wm > 0 else 0
                         f = base_f_data.copy()
                         f.update({
                             "記録ID": f"{datetime.now().strftime('%Y%m%d%H%M%S%f')}_{i}",
-                            "製品名": product_name, "詳細": item.get('詳細', ''), "作業時間_分": wm_per, "出来数": int(item.get('出来数', 0))
+                            "製品名": product_name, "詳細": item.get('詳細', ''), "作業時間_分": wm_per, "出来数": item_qty
                         })
                         if status == "完了":
                             f['完了日時'] = firestore.SERVER_TIMESTAMP
@@ -1111,12 +1114,12 @@ def main_app():
                                     if c_qty > 0:
                                         is_done = True
                                         
-                                status_icon = "✅ 済" if is_done else "➖ 未"
+                                status_icon = "✅ 済" if is_done else "➖"
                                 with cols[idx]:
                                     st.markdown(f"**{proc_name}**<br><span style='font-size:1.2rem;'>{status_icon}</span>", unsafe_allow_html=True)
                             st.divider()
 
-                            t_m = pd.DataFrame()
+                            # --- 明細(名入れ)の取得処理 ---
                             if not sch_m.empty:
                                 denpyo_col = next((col for col in sch.columns if '伝票' in col), sch.columns[0] if not sch.empty else None)
                                 denpyo_m_col = next((col for col in sch_m.columns if '伝票' in col), sch_m.columns[0] if not sch_m.empty else None)
@@ -1174,7 +1177,7 @@ def main_app():
                                             st.rerun()
                             else:
                                 st.markdown("### 📑 複数名入れの一括登録")
-                                st.success(f"{len(target_items)}件の名入れ先（費用項目を除外済）が見つかりました。")
+                                st.success(f"{len(target_items)}件の名入れ先が見つかりました。")
                                 
                                 st.write("対象会社リスト（チェックして一括処理）")
                                 col1_sel, col2_sel, _ = st.columns([1, 1, 2])
