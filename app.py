@@ -1098,39 +1098,31 @@ def main_app():
                                     st.markdown(f"**{proc_name}**<br><span style='font-size:1.2rem;'>{status_icon}</span>", unsafe_allow_html=True)
                             st.divider()
 
-                            # --- 明細(名入れ)の取得処理 ---
                             t_m = pd.DataFrame()
                             if not sch_m.empty:
-                                denpyo_m_col = next((col for col in sch_m.columns if '伝票' in col), None)
-                                c_name = parent_row.get('得意先名')
+                                # ユーザーご指定の通り「A列（インデックス0）」を伝票番号として強制指定
+                                denpyo_col = sch.columns[0]
+                                denpyo_m_col = sch_m.columns[0]
                                 
-                                # 1. まず該当の得意先で明細を絞る
-                                tmp_m = sch_m[sch_m['得意先名'] == c_name] if '得意先名' in sch_m.columns and pd.notna(c_name) else sch_m
+                                # 型の違い（例: 12345 と 12345.0）を防ぐため、両方を文字列にしてクリーニング
+                                d_val_raw = parent_row.iloc[0]
+                                d_val = str(d_val_raw).strip().replace('.0', '')
                                 
-                                # 2. 明細の中で、今回のカレンダー品名が存在する伝票番号を特定し、その伝票全体を取得する
-                                if denpyo_m_col and '品名' in tmp_m.columns:
-                                    target_denpyo = tmp_m[tmp_m['品名'] == p_prod][denpyo_m_col].unique()
-                                    if len(target_denpyo) > 0:
-                                        t_m = tmp_m[tmp_m[denpyo_m_col].isin(target_denpyo)]
-                                
-                                # 3. 上記で取れなかった場合のフォールバック（予定表の伝票番号で直接紐付け）
-                                if t_m.empty:
-                                    denpyo_col = next((col for col in sch.columns if '伝票' in col), None)
-                                    if denpyo_col and denpyo_m_col:
-                                        d_val = parent_row.get(denpyo_col)
-                                        if pd.notna(d_val):
-                                            t_m = sch_m[sch_m[denpyo_m_col] == d_val]
-                                    
-                                    # 4. さらにダメなら、この得意先の明細すべてを対象にする
-                                    if t_m.empty and not tmp_m.empty:
-                                        t_m = tmp_m
+                                if d_val and d_val != 'nan':
+                                    # 明細側のA列も同様にクリーニングして比較
+                                    clean_m_denpyo = sch_m.iloc[:, 0].astype(str).str.strip().str.replace('.0', '', regex=False)
+                                    t_m = sch_m[clean_m_denpyo == d_val]
                             
                             target_items = {}
                             if not t_m.empty:
-                                # 内容コード「9」のものを優先して名入れとして抽出
-                                if '内容コード' in t_m.columns:
-                                    # 文字列での一致と数値での一致の両方をカバー
-                                    naire_df = t_m[(t_m['内容コード'].astype(str).str.strip().str.replace('.0', '', regex=False) == '9') | (t_m['内容コード'] == 9)]
+                                # 内容コードの列を探す（表記ゆれ対応）
+                                code_col = next((c for c in t_m.columns if '内容コード' in c or '内容CD' in c), '内容コード')
+                                
+                                if code_col in t_m.columns:
+                                    # 全角の「９」や小数「9.0」などが混ざっていても確実に半角「9」として扱う
+                                    clean_codes = t_m[code_col].apply(lambda x: unicodedata.normalize('NFKC', str(x)).strip().replace('.0', ''))
+                                    naire_df = t_m[clean_codes == '9']
+                                    
                                     for _, row in naire_df.iterrows():
                                         content_val = str(row.get('内容', '')).strip()
                                         if content_val == 'nan' or not content_val:
