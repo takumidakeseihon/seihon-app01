@@ -19,22 +19,49 @@ st.set_page_config(page_title="製本記録アプリ", layout="wide")
 # CSSの定義
 st.markdown("""
 <style>
+/* 共通設定 */
 input, textarea, select { font-size: 16px !important; }
-/* スマホ画面（幅600px以下）でボタンを横並びにするためのクラス */
+
+/* ボタン内のテキストが2行に折り返されるのを防ぐ */
+button p {
+    white-space: nowrap !important;
+    margin-bottom: 0 !important;
+}
+
+/* スマホ画面（幅600px以下）のレイアウト調整 */
 @media (max-width: 600px) {
+    /* 1. スマホ画面全体の左右の余白を減らして画面を広く使う */
+    .block-container {
+        padding-left: 0.5rem !important;
+        padding-right: 0.5rem !important;
+    }
+
+    /* 2. ボタンの横並び設定の隙間を詰める */
     .button-container-row > div {
         display: flex;
         flex-direction: row !important;
-        gap: 0.5rem;
+        gap: 0.2rem !important;
     }
     .button-container-row > div > div {
         width: 33.33% !important;
     }
     .button-container-row button {
         width: 100% !important;
-        padding: 0.25rem 0.5rem !important;
-        font-size: 0.8rem !important;
+        padding: 0.2rem !important;
         min-height: 0px !important;
+    }
+    .button-container-row button p {
+        font-size: 0.75rem !important;
+    }
+
+    /* 3. 折りたたみ(Expander)のタイトルやその他の文字を少し小さくして1行に収まりやすくする */
+    button[data-baseweb="accordion-button"] div {
+        font-size: 0.85rem !important;
+        line-height: 1.2 !important;
+    }
+    
+    .stMarkdown p {
+        font-size: 0.85rem !important;
     }
 }
 </style>
@@ -1121,7 +1148,6 @@ def main_app():
                                         else:
                                             target_items[content_val] = {'会社名': content_val, '数量': qty}
                             
-                            # 【新機能】カレンダー進捗ダッシュボードの計算と表示
                             comp_df_all = load_from_firestore(db, "completed", days_limit=3000)
                             cal_prog = in_progress_df[in_progress_df['製品名'] == p_prod] if not in_progress_df.empty and '製品名' in in_progress_df.columns else pd.DataFrame()
                             cal_comp = comp_df_all[comp_df_all['製品名'] == p_prod] if not comp_df_all.empty and '製品名' in comp_df_all.columns else pd.DataFrame()
@@ -1228,7 +1254,6 @@ def main_app():
                     st.info("作業中のカレンダーはありません。")
                 else:
                     for p, g in cal_d_df.groupby('製品名'):
-                        # 【修正】デフォルトで閉じた状態に変更
                         with st.expander(f"**{p}**", expanded=False):
                             c_btn = st.button("親ごと完了", key=f"c_cal_{p}", type="primary")
                             if c_btn: handle_product_completion(p, view_key='cal_sub_view')
