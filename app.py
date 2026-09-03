@@ -940,6 +940,13 @@ def main_app():
         in_progress_df = load_from_firestore(db, "in_progress")
         st.session_state.in_progress_df = in_progress_df
         
+        # カレンダー製品のリストを取得（通常工程の一覧から除外するため）
+        schedule_df = load_csv_data(SCHEDULE_FILE)
+        calendar_products = []
+        if not schedule_df.empty and SCHEDULE_COL_DETAILS in schedule_df.columns and '品名' in schedule_df.columns:
+            cal_sch = schedule_df[schedule_df[SCHEDULE_COL_DETAILS].astype(str).str.contains('カレンダー', na=False)]
+            calendar_products = cal_sch['品名'].dropna().unique().tolist()
+            
         sub_view = st.session_state.get('sub_view', 'SELECT_PROCESS')
         
         if sub_view == 'INPUT_FORM': 
@@ -959,6 +966,9 @@ def main_app():
             sel_loc = st.selectbox("拠点", loc_opts, index=loc_opts.index(st.session_state.get("user_location", "すべて")) if st.session_state.get("user_location", "すべて") in loc_opts else 0)
             d_df = in_progress_df.copy()
             if not d_df.empty:
+                # カレンダー製品を通常工程の進行中一覧から隔離（非表示に）する
+                if '製品名' in d_df.columns and calendar_products:
+                    d_df = d_df[~d_df['製品名'].isin(calendar_products)]
                 if 'is_calendar' in d_df.columns:
                     d_df = d_df[d_df['is_calendar'] != True]
                 if "製品名" in d_df.columns:
@@ -1015,6 +1025,13 @@ def main_app():
         st.session_state.in_progress_df = in_progress_df
         cal_sub_view = st.session_state.get('cal_sub_view', 'SELECT')
         
+        # カレンダー製品のリストを取得
+        schedule_df = load_csv_data(SCHEDULE_FILE)
+        calendar_products = []
+        if not schedule_df.empty and SCHEDULE_COL_DETAILS in schedule_df.columns and '品名' in schedule_df.columns:
+            cal_sch = schedule_df[schedule_df[SCHEDULE_COL_DETAILS].astype(str).str.contains('カレンダー', na=False)]
+            calendar_products = cal_sch['品名'].dropna().unique().tolist()
+        
         if cal_sub_view == 'INPUT_FORM':
             process_form(default_data=st.session_state.get('cal_record_to_copy'), view_key='cal_sub_view', is_calendar=True)
         elif cal_sub_view == 'EDIT_FORM':
@@ -1044,40 +1061,87 @@ def main_app():
                         
                         if p_prod:
                             parent_row = cal_sch[cal_sch['品名']==p_prod].iloc[0]
+                            
+                            # --- 進捗状況ダッシュボードの表示 ---
+                            st.markdown("### 📊 各工程の進捗状況")
+                            total_qty = parent_row.get(SCHEDULE_COL_TOTAL_QUANTITY, 0)
+                            try:
+                                total_qty = int(float(total_qty)) if pd.notna(total_qty) else 0
+                            except:
+                                total_qty = 0
+                                
+                            all_tasks_p = load_tasks_for_customer(db, p_prod)
+                            
+                            if total_qty > 0:
+                                cols = st.columns(4)
+                                procs = ["断裁", "丁合", "綴じ", "梱包"]
+                                for idx, proc_name in enumerate(procs):
+                                    c_qty = 0
+                                    i_qty = 0
+                                    if not all_tasks_p.empty and '工程名' in all_tasks_p.columns:
+                                        pdf = all_tasks_p[all_tasks_p['工程名'].str.contains(proc_name, na=False)]
+                                        for _, r in pdf.iterrows():
+                                            q = int(r.get('出来数', 0)) if pd.notna(r.get('出来数')) else 0
+                                            if r.get('ステータス') == '完了':
+                                                c_qty += q
+                                            else:
+                                                i_qty += q
+                                    pct = min(100, int((c_qty / total_qty) * 100))
+                                    with cols[idx]:
+                                        st.markdown(f"**{proc_name}**")
+                                        st.progress(pct / 100.0)
+                                        st.caption(f"完:{c_qty:,} / 中:{i_qty:,} / 総:{total_qty:,}")
+                            else:
+                                st.info("総数が設定されていないため進捗は表示できません。")
+                            st.divider()
+
+                            # --- 明細(名入れ)の取得処理 ---
                             denpyo_col = next((col for col in sch.columns if '伝票' in col), None)
                             denpyo_m_col = next((col for col in sch_m.columns if '伝票' in col), None)
+                                    if pd.notna(c_code) and '得意先コード' in sch_m.columns:
+                                        t_m = sch_m[sch_m['得意先コード'] == c_code]
                             
-                            t_m = pd.DataFrame()
-                            if denpyo_col and denpyo_m_col:
-                                denpyo_val = parent_row.get(denpyo_col)
-                                if pd.notna(denpyo_val):
-                                    t_m = sch_m[sch_m[denpyo_m_col] == denpyo_val]
-                            else:
-                                c_code = parent_row.get('得意先コード')
-                                if pd.notna(c_code) and '得意先コード' in sch_m.columns:
-                                    t_m = sch_m[sch_m['得意先コード'] == c_code]
-                            
-                            exclude_words = ["区分け", "包代", "包装", "パレット", "箱代", "PUR", "送料", "運賃", "ダンボール", "段ボール", "値引き", "手数料"]
                             target_items = {}
                             if not t_m.empty:
-                                for _, row in t_m.iterrows():
-                                    content_val = str(row.get('内容', '')).strip()
-                                    if content_val == 'nan' or not content_val:
-                                        content_val = str(row.get('納品書明細', '')).strip()
-                                    if content_val == 'nan' or not content_val:
-                                        continue 
-                                    is_excluded = any(word in content_val for word in exclude_words)
-                                    
-                                    if not is_excluded:
-                                        qty_val = row.get('数量', 0)
-                                        try:
-                                            qty = int(float(qty_val)) if pd.notna(qty_val) else 0
-                                        except:
-                                            qty = 0
-                                        if content_val in target_items:
-                                            target_items[content_val]['数量'] += qty
-                                        else:
-                                            target_items[content_val] = {'会社名': content_val, '数量': qty}
+                                # 内容コード「9」のものを優先して名入れとして抽出
+                                if '内容コード' in t_m.columns:
+                                    naire_df = t_m[t_m['内容コード'].astype(str).str.strip().str.replace('.0', '', regex=False) == '9']
+                                    for _, row in naire_df.iterrows():
+                                        content_val = str(row.get('内容', '')).strip()
+                                        if content_val == 'nan' or not content_val:
+                                            content_val = str(row.get('納品書明細', '')).strip()
+                                        if content_val and content_val != 'nan':
+                                            qty_val = row.get('数量', 0)
+                                            try:
+                                                qty = int(float(qty_val)) if pd.notna(qty_val) else 0
+                                            except:
+                                                qty = 0
+                                            if content_val in target_items:
+                                                target_items[content_val]['数量'] += qty
+                                            else:
+                                                target_items[content_val] = {'会社名': content_val, '数量': qty}
+                                
+                                # 内容コード9が見つからなかった場合の予備（以前の抽出方式）
+                                if not target_items:
+                                    exclude_words = ["区分け", "包代", "包装", "パレット", "箱代", "PUR", "送料", "運賃", "ダンボール", "段ボール", "値引き", "手数料"]
+                                    for _, row in t_m.iterrows():
+                                        content_val = str(row.get('内容', '')).strip()
+                                        if content_val == 'nan' or not content_val:
+                                            content_val = str(row.get('納品書明細', '')).strip()
+                                        if content_val == 'nan' or not content_val:
+                                            continue 
+                                        is_excluded = any(word in content_val for word in exclude_words)
+                                        
+                                        if not is_excluded:
+                                            qty_val = row.get('数量', 0)
+                                            try:
+                                                qty = int(float(qty_val)) if pd.notna(qty_val) else 0
+                                            except:
+                                                qty = 0
+                                            if content_val in target_items:
+                                                target_items[content_val]['数量'] += qty
+                                            else:
+                                                target_items[content_val] = {'会社名': content_val, '数量': qty}
                             
                             if not target_items:
                                 st.markdown("### 🔘 単体で登録（名入れがない場合）")
@@ -1147,8 +1211,12 @@ def main_app():
             with c_right:
                 st.markdown("<h3>カレンダー進行中一覧</h3>", unsafe_allow_html=True)
                 cal_d_df = in_progress_df.copy()
-                if not cal_d_df.empty and 'is_calendar' in cal_d_df.columns:
-                    cal_d_df = cal_d_df[cal_d_df['is_calendar'] == True]
+                if not cal_d_df.empty and '製品名' in cal_d_df.columns:
+                    # カレンダーの製品名、または is_calendar が True のものを表示
+                    mask = cal_d_df['製品名'].isin(calendar_products)
+                    if 'is_calendar' in cal_d_df.columns:
+                        mask = mask | (cal_d_df['is_calendar'] == True)
+                    cal_d_df = cal_d_df[mask]
                 else:
                     cal_d_df = pd.DataFrame() 
                     
