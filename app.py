@@ -113,8 +113,15 @@ def load_csv_data(file_path):
     if file_path == SCHEDULE_FILE and "SCHEDULE_CSV_URL" in st.secrets and st.secrets["SCHEDULE_CSV_URL"]:
         try: return pd.read_csv(st.secrets["SCHEDULE_CSV_URL"], encoding="utf-8-sig")
         except: pass 
-    try: return pd.read_csv(file_path, encoding="utf-8-sig")
-    except: return pd.DataFrame()
+    
+    # エンコーディングのフォールバック（Excel出力のShift-JIS対策）
+    for enc in ["utf-8-sig", "cp932", "shift_jis", "utf-8"]:
+        try: 
+            df = pd.read_csv(file_path, encoding=enc)
+            if not df.empty: return df
+        except: 
+            continue
+    return pd.DataFrame()
 
 @st.cache_data(ttl=600)
 def load_from_firestore(_db, collection_name, active_only=False, days_limit=None):
@@ -883,12 +890,26 @@ def main_app():
                 try:
                     st.session_state.manual_schedule_df = pd.read_csv(uploaded_file, encoding="utf-8-sig")
                     success_count += 1
+                except UnicodeDecodeError:
+                    try:
+                        uploaded_file.seek(0)
+                        st.session_state.manual_schedule_df = pd.read_csv(uploaded_file, encoding="cp932")
+                        success_count += 1
+                    except Exception as e:
+                        st.error(f"予定表読み込みエラー(文字コード): {e}")
                 except Exception as e:
                     st.error(f"予定表読み込みエラー: {e}")
             if uploaded_m_file is not None:
                 try:
                     st.session_state.manual_schedule_m_df = pd.read_csv(uploaded_m_file, encoding="utf-8-sig")
                     success_count += 1
+                except UnicodeDecodeError:
+                    try:
+                        uploaded_m_file.seek(0)
+                        st.session_state.manual_schedule_m_df = pd.read_csv(uploaded_m_file, encoding="cp932")
+                        success_count += 1
+                    except Exception as e:
+                        st.error(f"明細読み込みエラー(文字コード): {e}")
                 except Exception as e:
                     st.error(f"明細読み込みエラー: {e}")
                     
@@ -1050,6 +1071,9 @@ def main_app():
                 if sch.empty: 
                     st.warning("予定表CSV が読み込めません。（サイドバーからアップロードしてください）")
                 else:
+                    if sch_m.empty:
+                        st.error("⚠️ 【警告】明細データ(schedule_m.csv) が読み込めていません！そのため名入れを検索できず単体登録になります。文字コードの問題か、ファイルが存在しない可能性があります。サイドバーから手動アップロードを試してください。")
+                        
                     cal_sch = sch[sch[SCHEDULE_COL_DETAILS].astype(str).str.contains('カレンダー', na=False)] if SCHEDULE_COL_DETAILS in sch.columns else pd.DataFrame()
                     if cal_sch.empty: 
                         st.info("予定表に「カレンダー」指定の案件がありません。")
