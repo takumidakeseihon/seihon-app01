@@ -1072,52 +1072,71 @@ def main_app():
                                 
                             all_tasks_p = load_tasks_for_customer(db, p_prod)
                             
-                            if total_qty > 0:
-                                cols = st.columns(4)
-                                procs = ["断裁", "丁合", "綴じ", "梱包"]
-                                for idx, proc_name in enumerate(procs):
-                                    c_qty = 0
-                                    i_qty = 0
-                                    if not all_tasks_p.empty and '工程名' in all_tasks_p.columns:
-                                        pdf = all_tasks_p[all_tasks_p['工程名'].str.contains(proc_name, na=False)]
-                                        for _, r in pdf.iterrows():
-                                            q = int(r.get('出来数', 0)) if pd.notna(r.get('出来数')) else 0
-                                            if r.get('ステータス') == '完了':
-                                                c_qty += q
-                                            else:
-                                                i_qty += q
-                                    pct = min(100, int((c_qty / total_qty) * 100))
-                                    with cols[idx]:
-                                        st.markdown(f"**{proc_name}**")
-                                        st.progress(pct / 100.0)
-                                        st.caption(f"完:{c_qty:,} / 中:{i_qty:,} / 総:{total_qty:,}")
-                            else:
-                                st.info("総数が設定されていないため進捗は表示できません。")
+                            cols = st.columns(4)
+                            procs = ["断裁", "丁合", "綴じ", "梱包"]
+                            for idx, proc_name in enumerate(procs):
+                                is_done = False
+                                c_qty = 0
+                                if not all_tasks_p.empty and '工程名' in all_tasks_p.columns:
+                                    pdf = all_tasks_p[all_tasks_p['工程名'].str.contains(proc_name, na=False)]
+                                    for _, r in pdf.iterrows():
+                                        q = int(r.get('出来数', 0)) if pd.notna(r.get('出来数')) else 0
+                                        if r.get('ステータス') == '完了':
+                                            c_qty += q
+                                
+                                # 総数の9割以上完了で「済」とする（総数がない場合は完了記録が1件でもあれば済）
+                                if total_qty > 0:
+                                    if c_qty >= (total_qty * 0.9):
+                                        is_done = True
+                                else:
+                                    if c_qty > 0:
+                                        is_done = True
+                                        
+                                status_icon = "✅ 済" if is_done else "➖ 未"
+                                with cols[idx]:
+                                    st.markdown(f"**{proc_name}**<br><span style='font-size:1.2rem;'>{status_icon}</span>", unsafe_allow_html=True)
                             st.divider()
 
                             # --- 明細(名入れ)の取得処理 ---
                             t_m = pd.DataFrame()
                             if not sch_m.empty:
-                                denpyo_col = next((col for col in sch.columns if '伝票' in col), None)
                                 denpyo_m_col = next((col for col in sch_m.columns if '伝票' in col), None)
-                                if denpyo_col and denpyo_m_col:
-                                    d_val = parent_row.get(denpyo_col)
-                                    if pd.notna(d_val):
-                                        t_m = sch_m[sch_m[denpyo_m_col] == d_val]
-                                else:
-                                    c_code = parent_row.get('得意先コード')
-                                    if pd.notna(c_code) and '得意先コード' in sch_m.columns:
-                                        t_m = sch_m[sch_m['得意先コード'] == c_code]
+                                c_name = parent_row.get('得意先名')
+                                
+                                # 1. まず該当の得意先で明細を絞る
+                                tmp_m = sch_m[sch_m['得意先名'] == c_name] if '得意先名' in sch_m.columns and pd.notna(c_name) else sch_m
+                                
+                                # 2. 明細の中で、今回のカレンダー品名が存在する伝票番号を特定し、その伝票全体を取得する
+                                if denpyo_m_col and '品名' in tmp_m.columns:
+                                    target_denpyo = tmp_m[tmp_m['品名'] == p_prod][denpyo_m_col].unique()
+                                    if len(target_denpyo) > 0:
+                                        t_m = tmp_m[tmp_m[denpyo_m_col].isin(target_denpyo)]
+                                
+                                # 3. 上記で取れなかった場合のフォールバック（予定表の伝票番号で直接紐付け）
+                                if t_m.empty:
+                                    denpyo_col = next((col for col in sch.columns if '伝票' in col), None)
+                                    if denpyo_col and denpyo_m_col:
+                                        d_val = parent_row.get(denpyo_col)
+                                        if pd.notna(d_val):
+                                            t_m = sch_m[sch_m[denpyo_m_col] == d_val]
+                                    
+                                    # 4. さらにダメなら、この得意先の明細すべてを対象にする
+                                    if t_m.empty and not tmp_m.empty:
+                                        t_m = tmp_m
                             
                             target_items = {}
                             if not t_m.empty:
                                 # 内容コード「9」のものを優先して名入れとして抽出
                                 if '内容コード' in t_m.columns:
-                                    naire_df = t_m[t_m['内容コード'].astype(str).str.strip().str.replace('.0', '', regex=False) == '9']
+                                    # 文字列での一致と数値での一致の両方をカバー
+                                    naire_df = t_m[(t_m['内容コード'].astype(str).str.strip().str.replace('.0', '', regex=False) == '9') | (t_m['内容コード'] == 9)]
                                     for _, row in naire_df.iterrows():
                                         content_val = str(row.get('内容', '')).strip()
                                         if content_val == 'nan' or not content_val:
+                                            content_val = str(row.get('品名', '')).strip()
+                                        if content_val == 'nan' or not content_val:
                                             content_val = str(row.get('納品書明細', '')).strip()
+                                        
                                         if content_val and content_val != 'nan':
                                             qty_val = row.get('数量', 0)
                                             try:
