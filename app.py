@@ -13,7 +13,6 @@ from PIL import Image
 
 st.set_page_config(page_title="製本記録アプリ", layout="wide")
 
-# 修正箇所: ここでCSSを一度だけ定義します。
 st.markdown("""
 <style>
 input, textarea, select { font-size: 16px !important; }
@@ -814,6 +813,7 @@ def show_admin_dashboard():
                                 st.rerun()
                     except Exception as e:
                         st.error(f"更新中にエラーが発生しました: {e}")
+
 def render_step1(schedule_df, display_df, selected_location, product_to_location):
     st.markdown(f"<h3>Step 1: 新規工程を記録（{selected_location}）</h3>", unsafe_allow_html=True)
     f_sch = schedule_df[schedule_df['拠点'] == selected_location] if selected_location != "すべて" and not schedule_df.empty and '拠点' in schedule_df.columns else schedule_df.copy()
@@ -1020,6 +1020,7 @@ def main_app():
                                 st.markdown('</div>', unsafe_allow_html=True)
                                 
                                 st.divider()
+                                
     elif main_view == "📅 カレンダー一括管理":
         in_progress_df = load_from_firestore(db, "in_progress")
         st.session_state.in_progress_df = in_progress_df
