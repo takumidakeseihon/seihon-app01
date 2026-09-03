@@ -1100,64 +1100,69 @@ def main_app():
 
                             t_m = pd.DataFrame()
                             if not sch_m.empty:
-                                # ユーザーご指定の通り「A列（インデックス0）」を伝票番号として強制指定
-                                denpyo_col = sch.columns[0]
-                                denpyo_m_col = sch_m.columns[0]
-                                
-                                # 型の違い（例: 12345 と 12345.0）を防ぐため、両方を文字列にしてクリーニング
+                                # アプローチ1: 伝票番号（A列）の完全一致（全角半角・ゼロ埋め・小数などを全て統一して比較）
                                 d_val_raw = parent_row.iloc[0]
-                                d_val = str(d_val_raw).strip().replace('.0', '')
+                                d_val = unicodedata.normalize('NFKC', str(d_val_raw)).strip().replace('.0', '').lstrip('0')
                                 
-                                if d_val and d_val != 'nan':
-                                    # 明細側のA列も同様にクリーニングして比較
-                                    clean_m_denpyo = sch_m.iloc[:, 0].astype(str).str.strip().str.replace('.0', '', regex=False)
-                                    t_m = sch_m[clean_m_denpyo == d_val]
+                                clean_m_denpyo = sch_m.iloc[:, 0].apply(lambda x: unicodedata.normalize('NFKC', str(x)).strip().replace('.0', '').lstrip('0'))
+                                t_m = sch_m[clean_m_denpyo == d_val]
+                                
+                                # アプローチ2: A列で全くヒットしなかった場合、明細の中に「このカレンダーの品名」が含まれる行を探し、その行の伝票番号を正解として抽出する
+                                if t_m.empty:
+                                    for col in sch_m.columns:
+                                        if sch_m[col].astype(str).str.contains(p_prod, na=False, regex=False).any():
+                                            found_a_vals = clean_m_denpyo[sch_m[col].astype(str).str.contains(p_prod, na=False, regex=False)].unique()
+                                            if len(found_a_vals) > 0:
+                                                t_m = sch_m[clean_m_denpyo.isin(found_a_vals)]
+                                                break
+                                                
+                                # アプローチ3: それでもダメなら、得意先名（sel_c）で該当会社の明細を全抽出する
+                                if t_m.empty:
+                                    cust_col = next((c for c in sch_m.columns if '得意先' in str(c) or '顧客' in str(c)), None)
+                                    if cust_col:
+                                        t_m = sch_m[sch_m[cust_col].astype(str).str.contains(sel_c, na=False, regex=False)]
                             
                             target_items = {}
                             if not t_m.empty:
-                                # 内容コードの列を探す（表記ゆれ対応）
-                                code_col = next((c for c in t_m.columns if '内容コード' in c or '内容CD' in c), '内容コード')
+                                # 「内容コード」の列を柔軟に特定する
+                                code_col = next((c for c in t_m.columns if '内容コード' in str(c) or '内容CD' in str(c)), None)
                                 
-                                if code_col in t_m.columns:
-                                    # 全角の「９」や小数「9.0」などが混ざっていても確実に半角「9」として扱う
+                                # もし列名が見つからない場合、実際に「9」が入っているコード列を探す
+                                if not code_col:
+                                    for c in t_m.columns:
+                                        has_9 = t_m[c].apply(lambda x: unicodedata.normalize('NFKC', str(x)).strip().replace('.0', '') == '9').any()
+                                        if has_9 and ('コード' in str(c) or 'CD' in str(c) or '区分' in str(c)):
+                                            code_col = c
+                                            break
+                                            
+                                if code_col:
+                                    # 全角の「９」も半角の「9」として処理
                                     clean_codes = t_m[code_col].apply(lambda x: unicodedata.normalize('NFKC', str(x)).strip().replace('.0', ''))
                                     naire_df = t_m[clean_codes == '9']
                                     
                                     for _, row in naire_df.iterrows():
-                                        content_val = str(row.get('内容', '')).strip()
-                                        if content_val == 'nan' or not content_val:
-                                            content_val = str(row.get('品名', '')).strip()
-                                        if content_val == 'nan' or not content_val:
-                                            content_val = str(row.get('納品書明細', '')).strip()
+                                        # 「内容」が入っている列を柔軟に特定する
+                                        content_col = next((c for c in t_m.columns if c == '内容'), None)
+                                        if not content_col: content_col = next((c for c in t_m.columns if '明細' in str(c) or '品名' in str(c)), None)
                                         
+                                        content_val = str(row.get(content_col, '')).strip() if content_col else ''
+                                        
+                                        # 列名で特定できない場合、文字が入っていそうなセルを探索
+                                        if not content_val or content_val == 'nan':
+                                            for c in t_m.columns:
+                                                v = str(row.get(c, '')).strip()
+                                                if v and v != 'nan' and v != '9' and not v.replace('.', '', 1).isdigit():
+                                                    content_val = v
+                                                    break
+                                                    
                                         if content_val and content_val != 'nan':
-                                            qty_val = row.get('数量', 0)
+                                            qty_col = next((c for c in t_m.columns if '数量' in str(c) or '数' in str(c)), None)
+                                            qty_val = row.get(qty_col, 0) if qty_col else 0
                                             try:
                                                 qty = int(float(qty_val)) if pd.notna(qty_val) else 0
                                             except:
                                                 qty = 0
-                                            if content_val in target_items:
-                                                target_items[content_val]['数量'] += qty
-                                            else:
-                                                target_items[content_val] = {'会社名': content_val, '数量': qty}
-                                
-                                # 内容コード9が見つからなかった場合の予備（以前の抽出方式）
-                                if not target_items:
-                                    exclude_words = ["区分け", "包代", "包装", "パレット", "箱代", "PUR", "送料", "運賃", "ダンボール", "段ボール", "値引き", "手数料"]
-                                    for _, row in t_m.iterrows():
-                                        content_val = str(row.get('内容', '')).strip()
-                                        if content_val == 'nan' or not content_val:
-                                            content_val = str(row.get('納品書明細', '')).strip()
-                                        if content_val == 'nan' or not content_val:
-                                            continue 
-                                        is_excluded = any(word in content_val for word in exclude_words)
-                                        
-                                        if not is_excluded:
-                                            qty_val = row.get('数量', 0)
-                                            try:
-                                                qty = int(float(qty_val)) if pd.notna(qty_val) else 0
-                                            except:
-                                                qty = 0
+                                                
                                             if content_val in target_items:
                                                 target_items[content_val]['数量'] += qty
                                             else:
