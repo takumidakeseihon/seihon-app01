@@ -778,6 +778,9 @@ def show_admin_dashboard():
             target_product = st.selectbox("予定表(CSV)の品名", [""] + official_products)
             manual_target = st.text_input("または、手動で正しい品名を入力", help="プルダウンに無い場合はこちらに入力してください")
             
+            st.write("**変更後の詳細（名入れ先など）※任意**")
+            target_detail = st.text_input("詳細を一括で上書きする場合", help="現場が「名入れ先」を間違って品名として登録してしまった場合、ここで本来の名入れ先に移し替えることができます。")
+            
         final_target = manual_target if manual_target else target_product
         
         if source_product and not source_product.startswith("（"):
@@ -799,10 +802,10 @@ def show_admin_dashboard():
                 st.error("変更元の品名を正しく選択してください。")
             elif not final_target:
                 st.error("変更先の品名を入力または選択してください。")
-            elif source_product == final_target:
-                st.error("変更元と変更先が同じです。")
+            elif source_product == final_target and not target_detail:
+                st.error("変更内容（品名か詳細）を入力してください。")
             else:
-                with st.spinner(f"「{source_product}」を「{final_target}」に変更中..."):
+                with st.spinner(f"「{source_product}」を変更中..."):
                     try:
                         target_rows = all_tasks_df[all_tasks_df['製品名'] == source_product]
                         if target_rows.empty:
@@ -817,12 +820,20 @@ def show_admin_dashboard():
                                 col_name = row.get('_collection')
                                 if col_name and doc_id:
                                     doc_ref = db_batch.collection(col_name).document(doc_id)
-                                    batch.update(doc_ref, {"製品名": final_target})
+                                    
+                                    # 品名の更新に加え、詳細(名入れ)も入力されていれば更新する
+                                    update_data = {"製品名": final_target}
+                                    if target_detail:
+                                        update_data["詳細"] = target_detail.strip()
+                                        update_data["is_calendar"] = True
+                                        
+                                    batch.update(doc_ref, update_data)
                                     update_count += 1
                                     
                             if update_count > 0:
                                 batch.commit()
-                                st.session_state.success_msg = f"✅ {update_count}件の作業記録を「{final_target}」に書き換えました！"
+                                detail_msg = f"（詳細を「{target_detail}」に上書きしました）" if target_detail else ""
+                                st.session_state.success_msg = f"✅ {update_count}件の作業記録を「{final_target}」に書き換えました！{detail_msg}"
                                 load_from_firestore.clear()
                                 load_tasks_for_customer.clear()
                                 st.rerun()
@@ -1120,19 +1131,33 @@ def main_app():
                             st.divider()
 
                             # --- 明細(名入れ)の取得処理 ---
+                            t_m = pd.DataFrame()
                             if not sch_m.empty:
-                                denpyo_col = next((col for col in sch.columns if '伝票' in col), sch.columns[0] if not sch.empty else None)
-                                denpyo_m_col = next((col for col in sch_m.columns if '伝票' in col), sch_m.columns[0] if not sch_m.empty else None)
+                                # 検索アプローチ1: 伝票番号（A列目）を確実に文字列として一致させる
+                                denpyo_val = str(parent_row.iloc[0]).strip().replace('.0', '')
+                                if denpyo_val and denpyo_val != 'nan':
+                                    sch_m['clean_denpyo'] = sch_m.iloc[:, 0].astype(str).str.strip().str.replace('.0', '', regex=False)
+                                    t_m = sch_m[sch_m['clean_denpyo'] == denpyo_val]
                                 
-                                if denpyo_col and denpyo_m_col:
-                                    d_val = parent_row.get(denpyo_col)
-                                    if pd.notna(d_val):
-                                        t_m = sch_m[sch_m[denpyo_m_col] == d_val]
+                                # 検索アプローチ2: もし伝票番号でヒットしなければ、品名が含まれている行を探し、その行の伝票番号をベースに探す
+                                if t_m.empty and '品名' in sch_m.columns:
+                                    match_by_name = sch_m[sch_m['品名'].astype(str).str.contains(p_prod, na=False, regex=False)]
+                                    if not match_by_name.empty:
+                                        guess_denpyo = str(match_by_name.iloc[0, 0]).strip().replace('.0', '')
+                                        t_m = sch_m[sch_m['clean_denpyo'] == guess_denpyo]
+                                
+                                # 検索アプローチ3: それでもダメなら、得意先名で強引に抽出
+                                if t_m.empty and '得意先名' in sch_m.columns and '得意先名' in parent_row:
+                                    cust_name = parent_row['得意先名']
+                                    if pd.notna(cust_name):
+                                        t_m = sch_m[sch_m['得意先名'] == cust_name]
                             
                             target_items = {}
                             if not t_m.empty:
+                                # 内容コード「9」（全角・半角・小数対応）のものを名入れとして抽出
                                 if '内容コード' in t_m.columns:
-                                    naire_df = t_m[(t_m['内容コード'].astype(str).str.strip().str.replace('.0', '', regex=False) == '9') | (t_m['内容コード'] == 9)]
+                                    t_m['clean_code'] = t_m['内容コード'].astype(str).str.strip().str.translate(str.maketrans('０１２３４５６７８９', '0123456789')).str.replace('.0', '', regex=False)
+                                    naire_df = t_m[t_m['clean_code'] == '9']
                                     
                                     for _, row in naire_df.iterrows():
                                         content_col = next((c for c in t_m.columns if c == '内容'), None)
@@ -1249,7 +1274,7 @@ def main_app():
                                 st.caption(f"{r['工程名']}{dtl_str} / 出来数: {r['出来数']}個 / 入力: {r.get('入力者名','')}")
                                 
                                 st.markdown('<div class="button-container-row">', unsafe_allow_html=True)
-                                cx, cy, cz = st.columns(3)
+                                cx, cy, cz = st.columns([1, 1, 1])
                                 if cx.button("編集", key=f"e_cal_{r['id']}", use_container_width=True): st.session_state.cal_record_to_edit, st.session_state.cal_sub_view = r.to_dict(), 'EDIT_FORM'; st.rerun()
                                 if cy.button("続き", key=f"cp_cal_{r['id']}", use_container_width=True): 
                                     d = r.to_dict(); d['開始時間'] = d['終了時間'] = ""; d['出来数'] = 0; d.pop('id', None)
