@@ -43,7 +43,7 @@ components.html("""<script>const doc=window.parent.document; function d(){doc.qu
 
 def clean_text(text):
     if pd.isna(text): return ""
-    return unicodedata.normalize('NFKC', str(text)).strip().replace(' ', '').replace(' ', '')
+    return unicodedata.normalize('NFKC', str(text)).strip().replace(' ', '').replace('　', '')
 
 def convert_gdrive_url(url):
     """Googleドライブの閲覧用URLを直接ダウンロード用URLに変換する"""
@@ -90,7 +90,7 @@ SAPPORO_MACHINES = {
 }
 WORKER_NAMES = [
     "赤松 浩明", "浅野 央詞", "小松 宣彦", "小山 輝義", "佐々木 善直", "藤井 康彰", "荒田 朋子", "川井 千代宝", "木原 裕治", "蟹谷 和豊", "高橋 誠", "大文字 俊幸",
-    "青塚 知代", "早川 健太", "石井 美津枝", "山下 泉", "小島 広勝", "菅原 加奈", "神馬 妃那", "ディアン ファトクローマン", "インドラ アデ カマルディン", "ムハマド ユヌス", "岳 匠", "立川 悠依", 
+    "青塚 知代", "早川 健太", "石井 美津枝", "山下 泉", "小島 広勝", "菅原 加奈", "神馬 妃那", "ディアン ファトクローマン", "インドラ アデ カマルディン", "ムハマド ユヌス", "岳　匠", "立川　悠依", 
     "家常 貴史", "藤田 祐司", "田中 二郎", "内田 進", "若杉 瑞樹", "小柄 浩二", "蓬畑 皓一", "藤井 翔太", "佐々木 輝", "ノヴィ アナ", "カロマー ユニシャ", "モニカ ジュリヤニ", "岳 司郎", "福田 準也", "アンギ プラティウィ", "ナイシラ オクタヴィアニ", "チンタ フィトリヤニラマダニ"
 ]
 ASAHIKAWA_MEMBERS = WORKER_NAMES[:24]
@@ -532,7 +532,7 @@ def show_admin_dashboard():
     st.markdown("<h2 style='font-size: clamp(1.2rem, 5vw, 2rem); margin-bottom: 1rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;' title='👑 管理者ダッシュボード'>👑 管理者ダッシュボード</h2>", unsafe_allow_html=True)
     
     current_user = st.session_state.get('logged_in_user', '')
-    is_admin = current_user in ["岳 匠", "福田 準也"]
+    is_admin = current_user in ["岳　匠", "福田 準也"]
     
     if not st.session_state.get('admin_authenticated', False) and not is_admin:
         st.info("この画面は日報を確認する管理者専用の画面です。パスワードを入力してください。")
@@ -578,7 +578,7 @@ def show_admin_dashboard():
             target_date = st.date_input("📅 表示する日付", value=datetime.now(timezone(timedelta(hours=9))).date())
         with col2:
             default_loc = "すべて"
-            if current_user == "岳 匠": default_loc = "旭川"
+            if current_user == "岳　匠": default_loc = "旭川"
             elif current_user == "福田 準也": default_loc = "札幌"
             
             loc_options = ["すべて", "旭川", "札幌"]
@@ -1268,12 +1268,3 @@ if 'logged_in_user' in st.session_state:
     else: main_app()
 else:
     login_screen()
-```eof
-
-### 変更・組み込みを行った箇所の詳細
-*   **107行目〜 (`load_csv_data`)**: GoogleドライブへのURL自動変換機能を追加。また、文字コードによるエラーが起きても自動で「Shift-JIS(cp932)」で読み直すように安全性を徹底しました。
-*   **328行目 (`process_form`内)**: カレンダー一括登録時の**時間（分）の計算を、「件数割り」から「部数（出来数）に応じた按分」**に変更しました。部数0の項目があってもエラーになりません。
-*   **663行目〜 (`admin_tab == "🛠️ 未照合データの一括修正"`)**: 管理者画面で**「変更後の詳細（名入れ先）」も一括上書き**できるようにしました。これを入力すると、データが強制的にカレンダー枠（`is_calendar = True`）として統合されます。
-*   **838行目〜 (`カレンダー一括管理`)**: カレンダー選択時に、これまでの完了済みのデータと進行中の出来数を自動で計算し、**「✅ 済」になる進捗ダッシュボード（断裁/丁合/綴じ/梱包）**が表示されるように復活・組み込みました。また、進行中タブはデフォルトで閉じた状態（`expanded=False`）にしています。
-
-ベースとなるコードを完全に把握いたしましたので、今後は安心してご指示ください。動作をご確認いただけますと幸いです。
