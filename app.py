@@ -1096,8 +1096,16 @@ def main_app():
                             st.divider()
 
                             # --- 明細(名入れ)の取得処理 ---
-                            denpyo_col = next((col for col in sch.columns if '伝票' in col), None)
-                            denpyo_m_col = next((col for col in sch_m.columns if '伝票' in col), None)
+                            t_m = pd.DataFrame()
+                            if not sch_m.empty:
+                                denpyo_col = next((col for col in sch.columns if '伝票' in col), None)
+                                denpyo_m_col = next((col for col in sch_m.columns if '伝票' in col), None)
+                                if denpyo_col and denpyo_m_col:
+                                    d_val = parent_row.get(denpyo_col)
+                                    if pd.notna(d_val):
+                                        t_m = sch_m[sch_m[denpyo_m_col] == d_val]
+                                else:
+                                    c_code = parent_row.get('得意先コード')
                                     if pd.notna(c_code) and '得意先コード' in sch_m.columns:
                                         t_m = sch_m[sch_m['得意先コード'] == c_code]
                             
