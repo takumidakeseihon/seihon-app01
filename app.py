@@ -108,14 +108,22 @@ def init_firebase():
 
 @st.cache_data(ttl=3600)
 def load_csv_data(file_path):
+    # 手動アップロードされたデータがある場合は優先
     if file_path == SCHEDULE_FILE and 'manual_schedule_df' in st.session_state: return st.session_state.manual_schedule_df
     if file_path == SCHEDULE_M_FILE and 'manual_schedule_m_df' in st.session_state: return st.session_state.manual_schedule_m_df
+    
+    # URL設定がある場合
     if file_path == SCHEDULE_FILE and "SCHEDULE_CSV_URL" in st.secrets and st.secrets["SCHEDULE_CSV_URL"]:
         try: return pd.read_csv(st.secrets["SCHEDULE_CSV_URL"], encoding="utf-8-sig")
         except: pass 
     
+    # 改善箇所：schedule_m.csv 用のURL設定（SCHEDULE_M_CSV_URL）も読み込めるように追加
+    if file_path == SCHEDULE_M_FILE and "SCHEDULE_M_CSV_URL" in st.secrets and st.secrets["SCHEDULE_M_CSV_URL"]:
+        try: return pd.read_csv(st.secrets["SCHEDULE_M_CSV_URL"], encoding="utf-8-sig")
+        except: pass 
+    
     # エンコーディングのフォールバック（Excel出力のShift-JIS対策）
-    for enc in ["utf-8-sig", "cp932", "shift_jis", "utf-8"]:
+    for enc in ["utf-8-sig", "cp932", "shift_jis", "utf-8", "mac_japanese"]:
         try: 
             df = pd.read_csv(file_path, encoding=enc)
             if not df.empty: return df
@@ -450,11 +458,11 @@ def show_daily_report():
         with st.expander("提出内容を確認"):
             st.write(f"- 機械: {sub_rep.get('機械の調子','')}\n- ヒヤリ: {sub_rep.get('ヒヤリハット','')}\n- 特記: {sub_rep.get('特記事項','')}")
     
-    # ここが今回のエラー修正箇所です。NaN(float)を安全に除外して判定します。
     t_tasks = pd.DataFrame()
     if not all_df.empty and '作成日時_dt' in all_df.columns:
         d_df = all_df[all_df['作成日時_dt'].dt.date == t_date]
-        if not d_df.empty: t_tasks = d_df[d_df.apply(lambda r: r.get('入力者名') == user or (isinstance(r.get('共同作業者'), list) and user in r.get('共同作業者')) or (isinstance(r.get('共同作業者'), str) and user in r.get('共同作業者')), axis=1)].sort_values('作成日時_dt')
+        if not d_df.empty: 
+            t_tasks = d_df[d_df.apply(lambda r: r.get('入力者名') == user or (isinstance(r.get('共同作業者'), list) and user in r.get('共同作業者')) or (isinstance(r.get('共同作業者'), str) and user in r.get('共同作業者')), axis=1)].sort_values('作成日時_dt')
     st.markdown(f"### 📋 作業履歴")
     if t_tasks.empty: st.info("この日の作業記録はありません。")
     else:
@@ -826,7 +834,6 @@ def render_step1(schedule_df, display_df, selected_location, product_to_location
     f_sch = schedule_df[schedule_df['拠点'] == selected_location] if selected_location != "すべて" and not schedule_df.empty and '拠点' in schedule_df.columns else schedule_df.copy()
     c_names = sorted(f_sch['得意先名'].dropna().unique().tolist()) if not f_sch.empty and '得意先名' in f_sch.columns else []
     
-    # 選択する得意先の初期値を決定
     default_customer = "すべての得意先"
     preselected_product = st.session_state.get('product_to_select', "")
     if preselected_product and not f_sch.empty and '品名' in f_sch.columns:
@@ -850,7 +857,6 @@ def render_step1(schedule_df, display_df, selected_location, product_to_location
         if preselected_product and preselected_product not in opts:
             opts.append(preselected_product)
         
-        # product_to_select があれば初期値にセット
         default_index = opts.index(preselected_product) if preselected_product in opts else 0
         sel_p = st.selectbox("製品を選択", opts, index=default_index)
         
@@ -865,13 +871,10 @@ def render_step1(schedule_df, display_df, selected_location, product_to_location
                 st.session_state.selected_product = fin_p
                 st.session_state.selected_process = sel_proc
                 st.session_state.sub_view = 'INPUT_FORM'
-                # 処理が終わったらクリア
                 if 'product_to_select' in st.session_state: del st.session_state.product_to_select
                 st.rerun()
 
 def main_app():
-    # 修正: メニュー切り替え時などに product_to_select を消さないようにここでの clear は削除
-    # if 'product_to_select' in st.session_state: del st.session_state.product_to_select
     if 'success_msg' in st.session_state: st.success(st.session_state.pop('success_msg'))
     
     st.sidebar.success(f"ログイン: **{st.session_state.logged_in_user}**")
@@ -961,7 +964,6 @@ def main_app():
         in_progress_df = load_from_firestore(db, "in_progress")
         st.session_state.in_progress_df = in_progress_df
         
-        # カレンダー製品のリストを取得（通常工程の一覧から除外するため）
         schedule_df = load_csv_data(SCHEDULE_FILE)
         calendar_products = []
         if not schedule_df.empty and SCHEDULE_COL_DETAILS in schedule_df.columns and '品名' in schedule_df.columns:
@@ -987,7 +989,6 @@ def main_app():
             sel_loc = st.selectbox("拠点", loc_opts, index=loc_opts.index(st.session_state.get("user_location", "すべて")) if st.session_state.get("user_location", "すべて") in loc_opts else 0)
             d_df = in_progress_df.copy()
             if not d_df.empty:
-                # カレンダー製品を通常工程の進行中一覧から隔離（非表示に）する
                 if '製品名' in d_df.columns and calendar_products:
                     d_df = d_df[~d_df['製品名'].isin(calendar_products)]
                 if 'is_calendar' in d_df.columns:
@@ -1030,10 +1031,9 @@ def main_app():
 
                                 st.caption(f"{time_badge} | {r['工程名']} / 出来数: {r['出来数']}個 / 入力: {r.get('入力者名','')}")
                                 
-                                # 修正箇所: ここでループ内にCSSを埋め込むのをやめ、シンプルにクラスだけ適用します。
                                 st.markdown('<div class="button-container-row">', unsafe_allow_html=True)
                                 cx, cy, cz = st.columns([1, 1, 1])
-                                if cx.button("編集", key=f"e_{r['id']}", use_container_width=True): st.session_state.record_to_edit, st.session_state.sub_view = r.to_dict(), 'EDIT_FORM'; st.rerun()
+                                if cx.button("編集", key=f"e_{r['id']}", use_container_width=True): st.session_state.record_to_edit, st.session_state.sub_view = 'EDIT_FORM'; st.rerun()
                                 if cy.button("続き", key=f"cp_{r['id']}", use_container_width=True): 
                                     d = r.to_dict(); d['開始時間'] = d['終了時間'] = ""; d['出来数'] = 0; d.pop('id', None)
                                     st.session_state.record_to_copy, st.session_state.sub_view = d, 'INPUT_FORM'; st.rerun()
@@ -1047,7 +1047,6 @@ def main_app():
         st.session_state.in_progress_df = in_progress_df
         cal_sub_view = st.session_state.get('cal_sub_view', 'SELECT')
         
-        # カレンダー製品のリストを取得
         schedule_df = load_csv_data(SCHEDULE_FILE)
         calendar_products = []
         if not schedule_df.empty and SCHEDULE_COL_DETAILS in schedule_df.columns and '品名' in schedule_df.columns:
@@ -1087,7 +1086,6 @@ def main_app():
                         if p_prod:
                             parent_row = cal_sch[cal_sch['品名']==p_prod].iloc[0]
                             
-                            # --- 進捗状況ダッシュボードの表示 ---
                             st.markdown("### 📊 各工程の進捗状況")
                             total_qty = parent_row.get(SCHEDULE_COL_TOTAL_QUANTITY, 0)
                             try:
@@ -1109,7 +1107,6 @@ def main_app():
                                         if r.get('ステータス') == '完了':
                                             c_qty += q
                                 
-                                # 総数の9割以上完了で「済」とする（総数がない場合は完了記録が1件でもあれば済）
                                 if total_qty > 0:
                                     if c_qty >= (total_qty * 0.9):
                                         is_done = True
@@ -1124,54 +1121,25 @@ def main_app():
 
                             t_m = pd.DataFrame()
                             if not sch_m.empty:
-                                # アプローチ1: 伝票番号（A列）の完全一致（全角半角・ゼロ埋め・小数などを全て統一して比較）
-                                d_val_raw = parent_row.iloc[0]
-                                d_val = unicodedata.normalize('NFKC', str(d_val_raw)).strip().replace('.0', '').lstrip('0')
+                                denpyo_col = next((col for col in sch.columns if '伝票' in col), sch.columns[0] if not sch.empty else None)
+                                denpyo_m_col = next((col for col in sch_m.columns if '伝票' in col), sch_m.columns[0] if not sch_m.empty else None)
                                 
-                                clean_m_denpyo = sch_m.iloc[:, 0].apply(lambda x: unicodedata.normalize('NFKC', str(x)).strip().replace('.0', '').lstrip('0'))
-                                t_m = sch_m[clean_m_denpyo == d_val]
-                                
-                                # アプローチ2: A列で全くヒットしなかった場合、明細の中に「このカレンダーの品名」が含まれる行を探し、その行の伝票番号を正解として抽出する
-                                if t_m.empty:
-                                    for col in sch_m.columns:
-                                        if sch_m[col].astype(str).str.contains(p_prod, na=False, regex=False).any():
-                                            found_a_vals = clean_m_denpyo[sch_m[col].astype(str).str.contains(p_prod, na=False, regex=False)].unique()
-                                            if len(found_a_vals) > 0:
-                                                t_m = sch_m[clean_m_denpyo.isin(found_a_vals)]
-                                                break
-                                                
-                                # アプローチ3: それでもダメなら、得意先名（sel_c）で該当会社の明細を全抽出する
-                                if t_m.empty:
-                                    cust_col = next((c for c in sch_m.columns if '得意先' in str(c) or '顧客' in str(c)), None)
-                                    if cust_col:
-                                        t_m = sch_m[sch_m[cust_col].astype(str).str.contains(sel_c, na=False, regex=False)]
+                                if denpyo_col and denpyo_m_col:
+                                    d_val = parent_row.get(denpyo_col)
+                                    if pd.notna(d_val):
+                                        t_m = sch_m[sch_m[denpyo_m_col] == d_val]
                             
                             target_items = {}
                             if not t_m.empty:
-                                # 「内容コード」の列を柔軟に特定する
-                                code_col = next((c for c in t_m.columns if '内容コード' in str(c) or '内容CD' in str(c)), None)
-                                
-                                # もし列名が見つからない場合、実際に「9」が入っているコード列を探す
-                                if not code_col:
-                                    for c in t_m.columns:
-                                        has_9 = t_m[c].apply(lambda x: unicodedata.normalize('NFKC', str(x)).strip().replace('.0', '') == '9').any()
-                                        if has_9 and ('コード' in str(c) or 'CD' in str(c) or '区分' in str(c)):
-                                            code_col = c
-                                            break
-                                            
-                                if code_col:
-                                    # 全角の「９」も半角の「9」として処理
-                                    clean_codes = t_m[code_col].apply(lambda x: unicodedata.normalize('NFKC', str(x)).strip().replace('.0', ''))
-                                    naire_df = t_m[clean_codes == '9']
+                                if '内容コード' in t_m.columns:
+                                    naire_df = t_m[(t_m['内容コード'].astype(str).str.strip().str.replace('.0', '', regex=False) == '9') | (t_m['内容コード'] == 9)]
                                     
                                     for _, row in naire_df.iterrows():
-                                        # 「内容」が入っている列を柔軟に特定する
                                         content_col = next((c for c in t_m.columns if c == '内容'), None)
                                         if not content_col: content_col = next((c for c in t_m.columns if '明細' in str(c) or '品名' in str(c)), None)
                                         
                                         content_val = str(row.get(content_col, '')).strip() if content_col else ''
                                         
-                                        # 列名で特定できない場合、文字が入っていそうなセルを探索
                                         if not content_val or content_val == 'nan':
                                             for c in t_m.columns:
                                                 v = str(row.get(c, '')).strip()
@@ -1261,7 +1229,6 @@ def main_app():
                 st.markdown("<h3>カレンダー進行中一覧</h3>", unsafe_allow_html=True)
                 cal_d_df = in_progress_df.copy()
                 if not cal_d_df.empty and '製品名' in cal_d_df.columns:
-                    # カレンダーの製品名、または is_calendar が True のものを表示
                     mask = cal_d_df['製品名'].isin(calendar_products)
                     if 'is_calendar' in cal_d_df.columns:
                         mask = mask | (cal_d_df['is_calendar'] == True)
@@ -1281,7 +1248,6 @@ def main_app():
                                 dtl_str = f" - {dtls}" if dtls else ""
                                 st.caption(f"{r['工程名']}{dtl_str} / 出来数: {r['出来数']}個 / 入力: {r.get('入力者名','')}")
                                 
-                                # 修正箇所: ここも同様にシンプルにクラスだけ適用します。
                                 st.markdown('<div class="button-container-row">', unsafe_allow_html=True)
                                 cx, cy, cz = st.columns(3)
                                 if cx.button("編集", key=f"e_cal_{r['id']}", use_container_width=True): st.session_state.cal_record_to_edit, st.session_state.cal_sub_view = r.to_dict(), 'EDIT_FORM'; st.rerun()
@@ -1298,7 +1264,6 @@ def main_app():
 
 st.markdown("<h1>📘 製本記録アプリ</h1>", unsafe_allow_html=True)
 
-# 修正箇所: window.parent.scrollTo を使用して、スマホの画面全体を確実に一番上までスムーズにスクロールさせます。
 if st.session_state.get('scroll_to_top'):
     components.html("<script>window.parent.scrollTo({top: 0, behavior: 'smooth'});</script>", height=0, width=0)
     st.session_state.scroll_to_top = False
