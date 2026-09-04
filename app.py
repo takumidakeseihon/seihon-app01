@@ -20,8 +20,15 @@ st.set_page_config(page_title="製本記録アプリ", layout="wide")
 st.markdown("""
 <style>
 input, textarea, select { font-size: 16px !important; }
-/* スマホ画面（幅600px以下）でボタンを横並びにするためのクラス */
+/* スマホ画面での最適化 */
 @media (max-width: 600px) {
+    .block-container {
+        padding-left: 1rem !important;
+        padding-right: 1rem !important;
+    }
+    h2, h3 {
+        font-size: 1.2rem !important;
+    }
     .button-container-row > div {
         display: flex;
         flex-direction: row !important;
@@ -32,9 +39,10 @@ input, textarea, select { font-size: 16px !important; }
     }
     .button-container-row button {
         width: 100% !important;
-        padding: 0.25rem 0.5rem !important;
-        font-size: 0.8rem !important;
+        padding: 0.25rem 0.2rem !important;
+        font-size: 0.75rem !important;
         min-height: 0px !important;
+        white-space: nowrap !important;
     }
 }
 </style>
@@ -1044,7 +1052,7 @@ def main_app():
                                 
                                 st.markdown('<div class="button-container-row">', unsafe_allow_html=True)
                                 cx, cy, cz = st.columns([1, 1, 1])
-                                if cx.button("編集", key=f"e_{r['id']}", use_container_width=True): st.session_state.record_to_edit, st.session_state.sub_view = r.to_dict(), 'EDIT_FORM'; st.rerun()
+                                if cx.button("編集", key=f"e_{r['id']}", use_container_width=True): st.session_state.record_to_edit, st.session_state.sub_view = 'EDIT_FORM'; st.rerun()
                                 if cy.button("続き", key=f"cp_{r['id']}", use_container_width=True): 
                                     d = r.to_dict(); d['開始時間'] = d['終了時間'] = ""; d['出来数'] = 0; d.pop('id', None)
                                     st.session_state.record_to_copy, st.session_state.sub_view = d, 'INPUT_FORM'; st.rerun()
@@ -1069,12 +1077,13 @@ def main_app():
             sch = load_csv_data(SCHEDULE_FILE)
             sch_m = load_csv_data(SCHEDULE_M_FILE)
             
-            # --- 新機能: 一部でも済になっているカレンダーの一覧抽出 ---
+            # --- 新機能: 一部でも済になっているカレンダーの一覧抽出と表での表示 ---
             cal_sch = pd.DataFrame()
             if not sch.empty:
                 cal_sch = sch[sch[SCHEDULE_COL_DETAILS].astype(str).str.contains('カレンダー', na=False)] if SCHEDULE_COL_DETAILS in sch.columns else pd.DataFrame()
                 if not cal_sch.empty:
                     done_calendars = []
+                    processed_prods = set()
                     comp_df_all = load_from_firestore(db, "completed", days_limit=3000)
                     denpyo_col = next((col for col in sch.columns if '伝票' in col), None)
                     denpyo_m_col = next((col for col in sch_m.columns if '伝票' in col), None)
@@ -1082,7 +1091,8 @@ def main_app():
 
                     for _, c_row in cal_sch.iterrows():
                         prod_name = c_row['品名']
-                        if pd.isna(prod_name) or prod_name in done_calendars: continue
+                        if pd.isna(prod_name) or prod_name in processed_prods: continue
+                        processed_prods.add(prod_name)
 
                         t_m = pd.DataFrame()
                         if denpyo_col and denpyo_m_col:
@@ -1116,6 +1126,7 @@ def main_app():
                         c_comp = comp_df_all[comp_df_all['製品名'] == prod_name] if not comp_df_all.empty and '製品名' in comp_df_all.columns else pd.DataFrame()
 
                         has_done_proc = False
+                        statuses = {}
                         for proc_name in ["断裁", "丁合", "綴じ", "梱包"]:
                             c_qty = 0
                             if not c_comp.empty and '工程名' in c_comp.columns:
@@ -1123,20 +1134,34 @@ def main_app():
                             if not c_prog.empty and '工程名' in c_prog.columns:
                                 c_qty += pd.to_numeric(c_prog[c_prog['工程名'].str.contains(proc_name, na=False)]['出来数'], errors='coerce').sum()
                             
+                            is_done = False
                             if total_qty > 0:
                                 if c_qty >= (total_qty * 0.9):
-                                    has_done_proc = True
-                                    break
+                                    is_done = True
                             elif c_qty > 0:
+                                is_done = True
+                                
+                            statuses[proc_name] = "✅ 済" if is_done else "➖"
+                            if is_done:
                                 has_done_proc = True
-                                break
                         
                         if has_done_proc:
-                            done_calendars.append(prod_name)
+                            done_calendars.append({
+                                "カレンダー品名": prod_name,
+                                "断裁": statuses["断裁"],
+                                "丁合": statuses["丁合"],
+                                "綴じ": statuses["綴じ"],
+                                "梱包": statuses["梱包"]
+                            })
                     
                     if done_calendars:
-                        st.markdown("##### ✅ いずれかの工程が完了したカレンダー")
-                        st.info("、 ".join(done_calendars))
+                        st.markdown("##### ✅ 着手済みカレンダーの進捗状況")
+                        df_done = pd.DataFrame(done_calendars)
+                        # インデックスを隠して表を表示
+                        try:
+                            st.dataframe(df_done, use_container_width=True, hide_index=True)
+                        except:
+                            st.dataframe(df_done, use_container_width=True)
                         st.divider()
             
             c_left, c_right = st.columns([1.3, 1])
@@ -1144,6 +1169,7 @@ def main_app():
                 if sch.empty: 
                     st.warning("予定表CSV が読み込めません。（サイドバーからアップロードしてください）")
                 else:
+                    cal_sch = sch[sch[SCHEDULE_COL_DETAILS].astype(str).str.contains('カレンダー', na=False)] if SCHEDULE_COL_DETAILS in sch.columns else pd.DataFrame()
                     if cal_sch.empty: 
                         st.info("予定表に「カレンダー」指定の案件がありません。")
                     else:
@@ -1194,7 +1220,7 @@ def main_app():
                             cal_prog = in_progress_df[in_progress_df['製品名'] == p_prod] if not in_progress_df.empty and '製品名' in in_progress_df.columns else pd.DataFrame()
                             cal_comp = comp_df_all[comp_df_all['製品名'] == p_prod] if not comp_df_all.empty and '製品名' in comp_df_all.columns else pd.DataFrame()
 
-                            st.markdown("##### 📈 全体進捗")
+                            st.markdown("##### 📈 選択中のカレンダー進捗")
                             proc_cols = ["断裁", "丁合", "綴じ", "梱包"]
                             cols = st.columns(len(proc_cols))
                             
