@@ -16,7 +16,6 @@ from PIL import Image
 
 st.set_page_config(page_title="製本記録アプリ", layout="wide")
 
-# CSSの定義
 st.markdown("""
 <style>
 input, textarea, select { font-size: 16px !important; }
@@ -35,7 +34,6 @@ input, textarea, select { font-size: 16px !important; }
         padding: 0.25rem 0.5rem !important;
         font-size: 0.8rem !important;
         min-height: 0px !important;
-        white-space: nowrap !important;
     }
 }
 </style>
@@ -137,7 +135,7 @@ def load_csv_data(file_path):
                     return pd.read_csv(io.BytesIO(content), encoding="cp932", encoding_errors="replace")
         except Exception as e:
             st.error(f"⚠️ {file_path} のURL読み込みに失敗しました: {e}")
-            pass
+            pass # エラー時はローカルファイルを試す
 
     try:
         try:
@@ -187,6 +185,7 @@ def handle_db_write(operation, success_message, error_message, rerun_on_success=
             st.session_state.pop('record_to_copy', None)
             st.session_state.pop('cal_record_to_copy', None)
             st.session_state.pop('cal_bulk_items', None)
+            st.session_state.pop('calendar_total_qty', None)
             if rerun_on_success:
                 load_from_firestore.clear(); load_tasks_for_customer.clear(); st.rerun()
     except Exception as e: st.error(f"{error_message}: {e}")
@@ -225,7 +224,7 @@ def handle_product_completion(product_name, view_key='sub_view'):
         db_b.commit()
     handle_db_write(op, f"✅ 「{product_name}」を作業完了にしました。", "完了処理中にエラー", view_key=view_key)
 
-def process_form(is_edit_mode=False, default_data=None, view_key='sub_view', is_calendar=False, bulk_items=None):
+def process_form(is_edit_mode=False, default_data=None, view_key='sub_view', is_calendar=False, bulk_items=None, calendar_total_qty=None):
     default_data = default_data or {}
     product_name = default_data.get('製品名', st.session_state.get('selected_product', ''))
     process_name = default_data.get('工程名', st.session_state.get('selected_process', ''))
@@ -243,12 +242,20 @@ def process_form(is_edit_mode=False, default_data=None, view_key='sub_view', is_
         if not product_row.empty:
             info = product_row.iloc[0]
             amt = info.get(SCHEDULE_COL_AMOUNT, 0)
+            
+            # 通常の予定表の総数を取得
             q_val = info.get(SCHEDULE_COL_TOTAL_QUANTITY, 0)
             try: default_schedule_qty = int(float(q_val)) if pd.notna(q_val) else 0
             except: default_schedule_qty = 0
             
             rmks = " | ".join([str(info[c]) for c in SCHEDULE_COL_REMARKS if c in info and pd.notna(info[c])])
-            st.info("\n\n".join([f"**{k}:** {str(v).replace('*', '\\*')}" for k, v in {"総数": info.get(SCHEDULE_COL_TOTAL_QUANTITY, ""), "受注金額": f"{int(amt):,}円" if pd.notna(amt) else "", "適用": info.get(SCHEDULE_COL_DETAILS, ""), "納期日付": info.get(SCHEDULE_COL_DUE_DATE, ""), "納期時間": info.get(SCHEDULE_COL_DELIVERY_TIME, ""), "備考": rmks}.items() if pd.notna(v) and str(v).strip() != ""]))
+            
+            # カレンダーの場合は、親＋名入れを合算した総数を表示する
+            display_total_qty = info.get(SCHEDULE_COL_TOTAL_QUANTITY, "")
+            if is_calendar and calendar_total_qty is not None:
+                display_total_qty = calendar_total_qty
+                
+            st.info("\n\n".join([f"**{k}:** {str(v).replace('*', '\\*')}" for k, v in {"総数": display_total_qty, "受注金額": f"{int(amt):,}円" if pd.notna(amt) else "", "適用": info.get(SCHEDULE_COL_DETAILS, ""), "納期日付": info.get(SCHEDULE_COL_DUE_DATE, ""), "納期時間": info.get(SCHEDULE_COL_DELIVERY_TIME, ""), "備考": rmks}.items() if pd.notna(v) and str(v).strip() != ""]))
     
     def to_time_obj(t_str):
         try: return datetime.strptime(t_str, '%H:%M').time() if t_str else None
@@ -295,12 +302,15 @@ def process_form(is_edit_mode=False, default_data=None, view_key='sub_view', is_
             total_qty = sum(int(item.get('出来数', 0)) for item in bulk_items)
             # 出来数を手動で編集可能に変更。デフォルトは各アイテムの合算値
             qty = st.number_input("出来数（一括登録の合計）", min_value=0, value=int(total_qty))
-            st.info("※手動で出来数を修正した場合、各会社の部数比率に応じて自動で按分されて記録されます。")
+            st.info("※手動で出来数を修正した場合、各会社の部数比率に応じて自動で按分されて記録されます。時間は部数に応じて按分されて記録されます。")
         else:
             # 新規入力時、出来数が0であれば予定表の「総数」をデフォルト値として挿入する
             init_qty = int(default_data.get('出来数', 0))
             if init_qty == 0 and not is_edit_mode:
-                init_qty = default_schedule_qty
+                if is_calendar and calendar_total_qty is not None:
+                    init_qty = calendar_total_qty
+                else:
+                    init_qty = default_schedule_qty
             qty = 0 if is_setup_only else st.number_input("出来数", min_value=0, step=1, value=init_qty, disabled=is_setup_only)
         
         workers = st.number_input("作業人数（合計）", min_value=0.5, step=0.5, value=float(default_data.get('作業人数', 1.0)), format="%.1f")
@@ -365,6 +375,7 @@ def process_form(is_edit_mode=False, default_data=None, view_key='sub_view', is_
             st.session_state.pop('record_to_copy', None)
             st.session_state.pop('cal_record_to_copy', None)
             st.session_state.pop('cal_bulk_items', None)
+            st.session_state.pop('calendar_total_qty', None)
             st.rerun()
             
         def submit_data(status):
@@ -388,7 +399,6 @@ def process_form(is_edit_mode=False, default_data=None, view_key='sub_view', is_
             if is_bulk:
                 original_total_qty_bulk = sum(int(item.get('出来数', 0)) for item in bulk_items)
                 user_total_qty_bulk = int(qty)
-                
                 def op():
                     b = firestore.client().batch()
                     current_qty_sum = 0
@@ -407,7 +417,7 @@ def process_form(is_edit_mode=False, default_data=None, view_key='sub_view', is_
                             item_qty = int(user_total_qty_bulk / len(bulk_items))
                         current_qty_sum += item_qty
                         
-                        # 時間の按分
+                        # 部数に応じて時間を按分する
                         assigned_time = 0
                         if wm > 0:
                             if original_total_qty_bulk > 0:
@@ -1034,24 +1044,19 @@ def main_app():
                 schedule_df['clean_品名'] = schedule_df['品名'].apply(clean_text)
                 p2l = schedule_df.drop_duplicates(subset=['clean_品名']).set_index('clean_品名')['拠点'].to_dict()
             sel_loc = st.selectbox("拠点", loc_opts, index=loc_opts.index(st.session_state.get("user_location", "すべて")) if st.session_state.get("user_location", "すべて") in loc_opts else 0)
-            
-            # 通常工程一覧から、適用が「カレンダー」の製品を完全に除外する
             d_df = in_progress_df.copy()
             if not d_df.empty:
                 if 'is_calendar' in d_df.columns:
                     d_df = d_df[d_df['is_calendar'] != True]
                 if '製品名' in d_df.columns and not schedule_df.empty and SCHEDULE_COL_DETAILS in schedule_df.columns:
-                    # 予定表で適用に「カレンダー」が含まれる品名を特定
                     cal_sch_mask = schedule_df[SCHEDULE_COL_DETAILS].astype(str).str.contains('カレンダー', na=False)
                     cal_prods_in_sch = set(schedule_df[cal_sch_mask]['clean_品名'].tolist())
-                    
                     d_df['clean_製品名'] = d_df['製品名'].apply(clean_text)
                     d_df = d_df[~d_df['clean_製品名'].isin(cal_prods_in_sch)]
                 
                 if "製品名" in d_df.columns:
                     if '拠点' not in d_df.columns: d_df['拠点'] = '未設定'
                     if sel_loc != "すべて": d_df = d_df[d_df['拠点'] == sel_loc]
-                    
             c_f, c_l = st.columns(2)
             with c_f: 
                 render_step1(schedule_df, d_df, sel_loc, p2l)
@@ -1086,7 +1091,7 @@ def main_app():
                                 
                                 st.markdown('<div class="button-container-row">', unsafe_allow_html=True)
                                 cx, cy, cz = st.columns([1, 1, 1])
-                                if cx.button("編集", key=f"e_{r['id']}", use_container_width=True): st.session_state.record_to_edit, st.session_state.sub_view = 'EDIT_FORM'; st.rerun()
+                                if cx.button("編集", key=f"e_{r['id']}", use_container_width=True): st.session_state.record_to_edit, st.session_state.sub_view = r.to_dict(), 'EDIT_FORM'; st.rerun()
                                 if cy.button("続き", key=f"cp_{r['id']}", use_container_width=True): 
                                     d = r.to_dict(); d['開始時間'] = d['終了時間'] = ""; d['出来数'] = 0; d.pop('id', None)
                                     st.session_state.record_to_copy, st.session_state.sub_view = d, 'INPUT_FORM'; st.rerun()
@@ -1100,18 +1105,17 @@ def main_app():
         cal_sub_view = st.session_state.get('cal_sub_view', 'SELECT')
         
         if cal_sub_view == 'INPUT_FORM':
-            process_form(default_data=st.session_state.get('cal_record_to_copy'), view_key='cal_sub_view', is_calendar=True)
+            process_form(default_data=st.session_state.get('cal_record_to_copy'), view_key='cal_sub_view', is_calendar=True, calendar_total_qty=st.session_state.get('calendar_total_qty'))
         elif cal_sub_view == 'EDIT_FORM':
-            process_form(is_edit_mode=True, default_data=st.session_state.get('cal_record_to_edit'), view_key='cal_sub_view', is_calendar=True)
+            process_form(is_edit_mode=True, default_data=st.session_state.get('cal_record_to_edit'), view_key='cal_sub_view', is_calendar=True, calendar_total_qty=st.session_state.get('calendar_total_qty'))
         elif cal_sub_view == 'INPUT_FORM_BULK':
-            process_form(default_data=st.session_state.get('cal_record_to_copy'), view_key='cal_sub_view', is_calendar=True, bulk_items=st.session_state.get('cal_bulk_items'))
+            process_form(default_data=st.session_state.get('cal_record_to_copy'), view_key='cal_sub_view', is_calendar=True, bulk_items=st.session_state.get('cal_bulk_items'), calendar_total_qty=st.session_state.get('calendar_total_qty'))
         else:
             st.session_state.cal_sub_view = 'SELECT'
             st.header("カレンダー一括管理")
             sch = load_csv_data(SCHEDULE_FILE)
             sch_m = load_csv_data(SCHEDULE_M_FILE)
             
-            # --- カレンダーの進行中・完了ダッシュボードの表示 ---
             cal_sch_table = pd.DataFrame()
             if not sch.empty:
                 cal_sch_table = sch[sch[SCHEDULE_COL_DETAILS].astype(str).str.contains('カレンダー', na=False)] if SCHEDULE_COL_DETAILS in sch.columns else pd.DataFrame()
@@ -1156,8 +1160,7 @@ def main_app():
                         try: p_qty = int(float(q)) if pd.notna(q) else 0
                         except: p_qty = 0
                         
-                        # 親元の総数（p_qty）か、名入れ合算（calc_m_qty）の大きい方を全体の総数として判定基準にする
-                        total_qty = max(p_qty, calc_m_qty)
+                        total_qty = p_qty + calc_m_qty
 
                         c_prog = in_progress_df[in_progress_df['製品名'] == prod_name] if not in_progress_df.empty and '製品名' in in_progress_df.columns else pd.DataFrame()
                         c_comp = comp_df_all[comp_df_all['製品名'] == prod_name] if not comp_df_all.empty and '製品名' in comp_df_all.columns else pd.DataFrame()
@@ -1182,7 +1185,6 @@ def main_app():
                             if is_done:
                                 has_done_proc = True
                         
-                        # 1つでも済の工程があればリストに追加
                         if has_done_proc:
                             done_calendars.append({
                                 "カレンダー品名": prod_name,
@@ -1253,21 +1255,47 @@ def main_app():
                                         else:
                                             target_items[content_val] = {'会社名': content_val, '数量': qty}
                             
-                            # 【親元分の自動追加処理】
                             p_qty_raw = parent_row.get(SCHEDULE_COL_TOTAL_QUANTITY, 0)
                             try: p_qty = int(float(p_qty_raw)) if pd.notna(p_qty_raw) else 0
                             except: p_qty = 0
                             
-                            m_total = sum(item['数量'] for item in target_items.values())
-                            diff_qty = p_qty - m_total
-                            
-                            if diff_qty > 0:
+                            if p_qty > 0:
                                 p_name = parent_row.get('得意先名', '')
                                 parent_label = f"{p_name}（親元分）" if pd.notna(p_name) and p_name else "親元（基本）分"
                                 if parent_label in target_items:
-                                    target_items[parent_label]['数量'] += diff_qty
+                                    target_items[parent_label]['数量'] += p_qty
                                 else:
-                                    target_items[parent_label] = {'会社名': parent_label, '数量': diff_qty}
+                                    target_items[parent_label] = {'会社名': parent_label, '数量': p_qty}
+                                    
+                            true_total_qty = sum(item['数量'] for item in target_items.values())
+                            
+                            comp_df_all = load_from_firestore(db, "completed", days_limit=3000)
+                            cal_prog = in_progress_df[in_progress_df['製品名'] == p_prod] if not in_progress_df.empty and '製品名' in in_progress_df.columns else pd.DataFrame()
+                            cal_comp = comp_df_all[comp_df_all['製品名'] == p_prod] if not comp_df_all.empty and '製品名' in comp_df_all.columns else pd.DataFrame()
+
+                            st.markdown("##### 📈 全体進捗")
+                            proc_cols = ["断裁", "丁合", "綴じ", "梱包"]
+                            cols = st.columns(len(proc_cols))
+                            
+                            for idx, proc_name in enumerate(proc_cols):
+                                c_qty = 0
+                                if not cal_comp.empty and '工程名' in cal_comp.columns:
+                                    c_qty += pd.to_numeric(cal_comp[cal_comp['工程名'].str.contains(proc_name, na=False)]['出来数'], errors='coerce').sum()
+                                if not cal_prog.empty and '工程名' in cal_prog.columns:
+                                    c_qty += pd.to_numeric(cal_prog[cal_prog['工程名'].str.contains(proc_name, na=False)]['出来数'], errors='coerce').sum()
+                                    
+                                total_qty = true_total_qty
+                                
+                                is_done = False
+                                if total_qty > 0:
+                                    if c_qty >= (total_qty * 0.9): is_done = True
+                                elif c_qty > 0:
+                                    is_done = True
+                                    
+                                status_icon = "✅ 済" if is_done else "➖"
+                                with cols[idx]:
+                                    st.markdown(f"**{proc_name}**<br><span style='font-size:1.2rem;'>{status_icon}</span>", unsafe_allow_html=True)
+                            st.divider()
 
                             if not target_items:
                                 st.markdown("### 🔘 単体で登録（名入れがない場合）")
@@ -1278,10 +1306,10 @@ def main_app():
                                     if c_btn.form_submit_button("入力を開始する", type="primary", use_container_width=True):
                                         if not sel_single: st.error("工程を選択してください。")
                                         else:
-                                            qty = parent_row.get(SCHEDULE_COL_TOTAL_QUANTITY, 0)
                                             st.session_state.cal_record_to_copy = {
-                                                '製品名': p_prod, '工程名': sel_single, '詳細': "", '出来数': int(qty) if pd.notna(qty) else 0
+                                                '製品名': p_prod, '工程名': sel_single, '詳細': "", '出来数': int(true_total_qty)
                                             }
+                                            st.session_state.calendar_total_qty = true_total_qty
                                             st.session_state.cal_sub_view = 'INPUT_FORM'
                                             st.rerun()
                             else:
@@ -1316,6 +1344,7 @@ def main_app():
                                     else:
                                         st.session_state.cal_record_to_copy = {'製品名': p_prod, '工程名': sel_proc}
                                         st.session_state.cal_bulk_items = [{'詳細': item['会社名'], '出来数': item['数量']} for item in checked_comps]
+                                        st.session_state.calendar_total_qty = true_total_qty
                                         st.session_state.cal_sub_view = 'INPUT_FORM_BULK'
                                         st.rerun()
                                         
@@ -1331,27 +1360,22 @@ def main_app():
                                             st.session_state.cal_record_to_copy = {
                                                 '製品名': p_prod, '工程名': m_proc, '詳細': m_comp.strip(), '出来数': m_qty
                                             }
+                                            st.session_state.calendar_total_qty = true_total_qty
                                             st.session_state.cal_sub_view = 'INPUT_FORM'
                                             st.rerun()
             with c_right:
                 st.markdown("<h3>カレンダー進行中一覧</h3>", unsafe_allow_html=True)
                 cal_d_df = in_progress_df.copy()
-                
-                # 適用が「カレンダー」の製品をこの一覧に合流させる
                 is_cal_mask = pd.Series(False, index=cal_d_df.index) if not cal_d_df.empty else pd.Series(dtype=bool)
-                
                 if not cal_d_df.empty:
                     if 'is_calendar' in cal_d_df.columns:
                         is_cal_mask = is_cal_mask | (cal_d_df['is_calendar'] == True)
-                    
                     if '製品名' in cal_d_df.columns and not sch.empty and '品名' in sch.columns and SCHEDULE_COL_DETAILS in sch.columns:
                         sch['clean_品名'] = sch['品名'].apply(clean_text)
                         cal_sch_mask = sch[SCHEDULE_COL_DETAILS].astype(str).str.contains('カレンダー', na=False)
                         cal_prods = set(sch[cal_sch_mask]['clean_品名'].tolist())
-                        
                         cal_d_df['clean_製品名'] = cal_d_df['製品名'].apply(clean_text)
                         is_cal_mask = is_cal_mask | cal_d_df['clean_製品名'].isin(cal_prods)
-                        
                     cal_d_df = cal_d_df[is_cal_mask]
                     
                 if cal_d_df.empty: 
@@ -1375,14 +1399,12 @@ def main_app():
                                 if cz.button("削除", key=f"d_cal_{r['id']}", use_container_width=True): db.collection("in_progress").document(r['id']).delete(); load_from_firestore.clear(); st.rerun()
                                 st.markdown('</div>', unsafe_allow_html=True)
                                 st.divider()
-                                
     elif main_view == "📝 日報（退勤報告）":
         show_daily_report()
     elif main_view == "👑 管理者画面":
         show_admin_dashboard()
 
 st.markdown("<h1>📘 製本記録アプリ</h1>", unsafe_allow_html=True)
-
 if st.session_state.get('scroll_to_top'):
     components.html("<script>window.parent.scrollTo({top: 0, behavior: 'smooth'});</script>", height=0, width=0)
     st.session_state.scroll_to_top = False
