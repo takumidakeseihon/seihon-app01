@@ -1006,18 +1006,34 @@ def main_app():
             schedule_df = load_csv_data(SCHEDULE_FILE)
             loc_opts = ["すべて", "旭川", "札幌"]
             p2l = {}
-            if not schedule_df.empty and SCHEDULE_COL_LOCATION_CODE in schedule_df.columns and '品名' in schedule_df.columns:
-                schedule_df['拠点'] = pd.to_numeric(schedule_df[SCHEDULE_COL_LOCATION_CODE], errors='coerce').map({1: "旭川", 2: "札幌"}).fillna('未設定')
+            calendar_products = set()
+            
+            if not schedule_df.empty and '品名' in schedule_df.columns:
                 schedule_df['clean_品名'] = schedule_df['品名'].apply(clean_text)
-                p2l = schedule_df.drop_duplicates(subset=['clean_品名']).set_index('clean_品名')['拠点'].to_dict()
+                if SCHEDULE_COL_LOCATION_CODE in schedule_df.columns:
+                    schedule_df['拠点'] = pd.to_numeric(schedule_df[SCHEDULE_COL_LOCATION_CODE], errors='coerce').map({1: "旭川", 2: "札幌"}).fillna('未設定')
+                    p2l = schedule_df.drop_duplicates(subset=['clean_品名']).set_index('clean_品名')['拠点'].to_dict()
+                
+                # 「適用」にカレンダーが含まれる品名を特定し、通常工程からは除外する
+                if SCHEDULE_COL_DETAILS in schedule_df.columns:
+                    cal_sch_mask = schedule_df[SCHEDULE_COL_DETAILS].astype(str).str.contains('カレンダー', na=False)
+                    calendar_products = set(schedule_df[cal_sch_mask]['clean_品名'].tolist())
+
             sel_loc = st.selectbox("拠点", loc_opts, index=loc_opts.index(st.session_state.get("user_location", "すべて")) if st.session_state.get("user_location", "すべて") in loc_opts else 0)
             d_df = in_progress_df.copy()
             if not d_df.empty:
+                # 1. フラグによる除外
                 if 'is_calendar' in d_df.columns:
                     d_df = d_df[d_df['is_calendar'] != True]
+                
+                # 2. 予定表の「適用」に基づく強力な除外
                 if "製品名" in d_df.columns:
+                    d_df['clean_製品名'] = d_df['製品名'].apply(clean_text)
+                    d_df = d_df[~d_df['clean_製品名'].isin(calendar_products)]
+                    
                     if '拠点' not in d_df.columns: d_df['拠点'] = '未設定'
                     if sel_loc != "すべて": d_df = d_df[d_df['拠点'] == sel_loc]
+                    
             c_f, c_l = st.columns(2)
             with c_f: 
                 render_step1(schedule_df, d_df, sel_loc, p2l)
@@ -1052,7 +1068,7 @@ def main_app():
                                 
                                 st.markdown('<div class="button-container-row">', unsafe_allow_html=True)
                                 cx, cy, cz = st.columns([1, 1, 1])
-                                if cx.button("編集", key=f"e_{r['id']}", use_container_width=True): st.session_state.record_to_edit, st.session_state.sub_view = 'EDIT_FORM'; st.rerun()
+                                if cx.button("編集", key=f"e_{r['id']}", use_container_width=True): st.session_state.record_to_edit, st.session_state.sub_view = r.to_dict(), 'EDIT_FORM'; st.rerun()
                                 if cy.button("続き", key=f"cp_{r['id']}", use_container_width=True): 
                                     d = r.to_dict(); d['開始時間'] = d['終了時間'] = ""; d['出来数'] = 0; d.pop('id', None)
                                     st.session_state.record_to_copy, st.session_state.sub_view = d, 'INPUT_FORM'; st.rerun()
@@ -1060,6 +1076,7 @@ def main_app():
                                 st.markdown('</div>', unsafe_allow_html=True)
                                 
                                 st.divider()
+                                
     elif main_view == "📅 カレンダー一括管理":
         in_progress_df = load_from_firestore(db, "in_progress")
         st.session_state.in_progress_df = in_progress_df
@@ -1077,11 +1094,11 @@ def main_app():
             sch = load_csv_data(SCHEDULE_FILE)
             sch_m = load_csv_data(SCHEDULE_M_FILE)
             
-            # --- 新機能: 一部でも済になっているカレンダーの一覧抽出と表での表示 ---
-            cal_sch = pd.DataFrame()
+            # --- 進行中カレンダーの全体進捗テーブル表示（タイトル直下） ---
+            cal_sch_table = pd.DataFrame()
             if not sch.empty:
-                cal_sch = sch[sch[SCHEDULE_COL_DETAILS].astype(str).str.contains('カレンダー', na=False)] if SCHEDULE_COL_DETAILS in sch.columns else pd.DataFrame()
-                if not cal_sch.empty:
+                cal_sch_table = sch[sch[SCHEDULE_COL_DETAILS].astype(str).str.contains('カレンダー', na=False)] if SCHEDULE_COL_DETAILS in sch.columns else pd.DataFrame()
+                if not cal_sch_table.empty:
                     done_calendars = []
                     processed_prods = set()
                     comp_df_all = load_from_firestore(db, "completed", days_limit=3000)
@@ -1089,7 +1106,7 @@ def main_app():
                     denpyo_m_col = next((col for col in sch_m.columns if '伝票' in col), None)
                     exclude_words = ["区分け", "包代", "包装", "パレット", "箱代", "PUR", "送料", "運賃", "ダンボール", "段ボール", "値引き", "手数料"]
 
-                    for _, c_row in cal_sch.iterrows():
+                    for _, c_row in cal_sch_table.iterrows():
                         prod_name = c_row['品名']
                         if pd.isna(prod_name) or prod_name in processed_prods: continue
                         processed_prods.add(prod_name)
@@ -1155,15 +1172,14 @@ def main_app():
                             })
                     
                     if done_calendars:
-                        st.markdown("##### ✅ 着手済みカレンダーの進捗状況")
+                        st.markdown("##### 稼働中のカレンダー進捗状況")
                         df_done = pd.DataFrame(done_calendars)
-                        # インデックスを隠して表を表示
                         try:
                             st.dataframe(df_done, use_container_width=True, hide_index=True)
                         except:
                             st.dataframe(df_done, use_container_width=True)
                         st.divider()
-            
+
             c_left, c_right = st.columns([1.3, 1])
             with c_left:
                 if sch.empty: 
@@ -1216,36 +1232,6 @@ def main_app():
                                         else:
                                             target_items[content_val] = {'会社名': content_val, '数量': qty}
                             
-                            comp_df_all = load_from_firestore(db, "completed", days_limit=3000)
-                            cal_prog = in_progress_df[in_progress_df['製品名'] == p_prod] if not in_progress_df.empty and '製品名' in in_progress_df.columns else pd.DataFrame()
-                            cal_comp = comp_df_all[comp_df_all['製品名'] == p_prod] if not comp_df_all.empty and '製品名' in comp_df_all.columns else pd.DataFrame()
-
-                            st.markdown("##### 📈 選択中のカレンダー進捗")
-                            proc_cols = ["断裁", "丁合", "綴じ", "梱包"]
-                            cols = st.columns(len(proc_cols))
-                            
-                            for idx, proc_name in enumerate(proc_cols):
-                                c_qty = 0
-                                if not cal_comp.empty and '工程名' in cal_comp.columns:
-                                    c_qty += pd.to_numeric(cal_comp[cal_comp['工程名'].str.contains(proc_name, na=False)]['出来数'], errors='coerce').sum()
-                                if not cal_prog.empty and '工程名' in cal_prog.columns:
-                                    c_qty += pd.to_numeric(cal_prog[cal_prog['工程名'].str.contains(proc_name, na=False)]['出来数'], errors='coerce').sum()
-                                    
-                                total_qty = sum(item['数量'] for item in target_items.values()) if target_items else parent_row.get(SCHEDULE_COL_TOTAL_QUANTITY, 0)
-                                try: total_qty = int(float(total_qty)) if pd.notna(total_qty) else 0
-                                except: total_qty = 0
-                                
-                                is_done = False
-                                if total_qty > 0:
-                                    if c_qty >= (total_qty * 0.9): is_done = True
-                                elif c_qty > 0:
-                                    is_done = True
-                                    
-                                status_icon = "✅ 済" if is_done else "➖"
-                                with cols[idx]:
-                                    st.markdown(f"**{proc_name}**<br><span style='font-size:1.2rem;'>{status_icon}</span>", unsafe_allow_html=True)
-                            st.divider()
-
                             if not target_items:
                                 st.markdown("### 🔘 単体で登録（名入れがない場合）")
                                 st.info("このカレンダーには名入れが見つかりません。単体として登録します。")
@@ -1313,10 +1299,25 @@ def main_app():
             with c_right:
                 st.markdown("<h3>カレンダー進行中一覧</h3>", unsafe_allow_html=True)
                 cal_d_df = in_progress_df.copy()
-                if not cal_d_df.empty and 'is_calendar' in cal_d_df.columns:
-                    cal_d_df = cal_d_df[cal_d_df['is_calendar'] == True]
-                else:
-                    cal_d_df = pd.DataFrame() 
+                
+                # 予定表からカレンダーの品名を特定し、フラグが無くても合流させる強力なフィルタリング
+                is_cal_mask = pd.Series(False, index=cal_d_df.index) if not cal_d_df.empty else pd.Series(dtype=bool)
+                
+                if not cal_d_df.empty:
+                    # 1. 記録時のフラグ(is_calendar)による判定
+                    if 'is_calendar' in cal_d_df.columns:
+                        is_cal_mask = is_cal_mask | (cal_d_df['is_calendar'] == True)
+                    
+                    # 2. 予定表の「適用＝カレンダー」に合致する品名なら強制的に含める
+                    if '製品名' in cal_d_df.columns and not sch.empty and '品名' in sch.columns and SCHEDULE_COL_DETAILS in sch.columns:
+                        sch['clean_品名'] = sch['品名'].apply(clean_text)
+                        cal_sch_mask = sch[SCHEDULE_COL_DETAILS].astype(str).str.contains('カレンダー', na=False)
+                        cal_prods = set(sch[cal_sch_mask]['clean_品名'].tolist())
+                        
+                        cal_d_df['clean_製品名'] = cal_d_df['製品名'].apply(clean_text)
+                        is_cal_mask = is_cal_mask | cal_d_df['clean_製品名'].isin(cal_prods)
+                        
+                    cal_d_df = cal_d_df[is_cal_mask]
                     
                 if cal_d_df.empty: 
                     st.info("作業中のカレンダーはありません。")
@@ -1339,12 +1340,14 @@ def main_app():
                                 if cz.button("削除", key=f"d_cal_{r['id']}", use_container_width=True): db.collection("in_progress").document(r['id']).delete(); load_from_firestore.clear(); st.rerun()
                                 st.markdown('</div>', unsafe_allow_html=True)
                                 st.divider()
+                                
     elif main_view == "📝 日報（退勤報告）":
         show_daily_report()
     elif main_view == "👑 管理者画面":
         show_admin_dashboard()
 
 st.markdown("<h1>📘 製本記録アプリ</h1>", unsafe_allow_html=True)
+
 if st.session_state.get('scroll_to_top'):
     components.html("<script>window.parent.scrollTo({top: 0, behavior: 'smooth'});</script>", height=0, width=0)
     st.session_state.scroll_to_top = False
