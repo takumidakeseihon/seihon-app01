@@ -20,15 +20,8 @@ st.set_page_config(page_title="製本記録アプリ", layout="wide")
 st.markdown("""
 <style>
 input, textarea, select { font-size: 16px !important; }
-/* スマホ画面での最適化 */
+/* スマホ画面（幅600px以下）でボタンを横並びにするためのクラス */
 @media (max-width: 600px) {
-    .block-container {
-        padding-left: 1rem !important;
-        padding-right: 1rem !important;
-    }
-    h2, h3 {
-        font-size: 1.2rem !important;
-    }
     .button-container-row > div {
         display: flex;
         flex-direction: row !important;
@@ -39,8 +32,8 @@ input, textarea, select { font-size: 16px !important; }
     }
     .button-container-row button {
         width: 100% !important;
-        padding: 0.25rem 0.2rem !important;
-        font-size: 0.75rem !important;
+        padding: 0.25rem 0.5rem !important;
+        font-size: 0.8rem !important;
         min-height: 0px !important;
         white-space: nowrap !important;
     }
@@ -144,7 +137,7 @@ def load_csv_data(file_path):
                     return pd.read_csv(io.BytesIO(content), encoding="cp932", encoding_errors="replace")
         except Exception as e:
             st.error(f"⚠️ {file_path} のURL読み込みに失敗しました: {e}")
-            pass # エラー時はローカルファイルを試す
+            pass
 
     try:
         try:
@@ -388,7 +381,6 @@ def process_form(is_edit_mode=False, default_data=None, view_key='sub_view', is_
                     b = firestore.client().batch()
                     for i, item in enumerate(bulk_items):
                         item_qty = int(item.get('出来数', 0))
-                        # 部数に応じて時間を按分する
                         assigned_time = 0
                         if wm > 0:
                             if total_qty_bulk > 0:
@@ -854,11 +846,10 @@ def show_admin_dashboard():
                                 if col_name and doc_id:
                                     doc_ref = db_batch.collection(col_name).document(doc_id)
                                     
-                                    # 品名の更新に加え、詳細(名入れ)も入力されていれば更新する
                                     update_data = {"製品名": final_target}
                                     if target_detail:
                                         update_data["詳細"] = target_detail.strip()
-                                        update_data["is_calendar"] = True # カレンダーとして強制認識
+                                        update_data["is_calendar"] = True 
                                         
                                     batch.update(doc_ref, update_data)
                                     update_count += 1
@@ -1014,7 +1005,6 @@ def main_app():
                     schedule_df['拠点'] = pd.to_numeric(schedule_df[SCHEDULE_COL_LOCATION_CODE], errors='coerce').map({1: "旭川", 2: "札幌"}).fillna('未設定')
                     p2l = schedule_df.drop_duplicates(subset=['clean_品名']).set_index('clean_品名')['拠点'].to_dict()
                 
-                # 「適用」にカレンダーが含まれる品名を特定し、通常工程からは除外する
                 if SCHEDULE_COL_DETAILS in schedule_df.columns:
                     cal_sch_mask = schedule_df[SCHEDULE_COL_DETAILS].astype(str).str.contains('カレンダー', na=False)
                     calendar_products = set(schedule_df[cal_sch_mask]['clean_品名'].tolist())
@@ -1022,11 +1012,9 @@ def main_app():
             sel_loc = st.selectbox("拠点", loc_opts, index=loc_opts.index(st.session_state.get("user_location", "すべて")) if st.session_state.get("user_location", "すべて") in loc_opts else 0)
             d_df = in_progress_df.copy()
             if not d_df.empty:
-                # 1. フラグによる除外
                 if 'is_calendar' in d_df.columns:
                     d_df = d_df[d_df['is_calendar'] != True]
                 
-                # 2. 予定表の「適用」に基づく強力な除外
                 if "製品名" in d_df.columns:
                     d_df['clean_製品名'] = d_df['製品名'].apply(clean_text)
                     d_df = d_df[~d_df['clean_製品名'].isin(calendar_products)]
@@ -1094,7 +1082,6 @@ def main_app():
             sch = load_csv_data(SCHEDULE_FILE)
             sch_m = load_csv_data(SCHEDULE_M_FILE)
             
-            # --- 進行中カレンダーの全体進捗テーブル表示（タイトル直下） ---
             cal_sch_table = pd.DataFrame()
             if not sch.empty:
                 cal_sch_table = sch[sch[SCHEDULE_COL_DETAILS].astype(str).str.contains('カレンダー', na=False)] if SCHEDULE_COL_DETAILS in sch.columns else pd.DataFrame()
@@ -1121,7 +1108,7 @@ def main_app():
                             if pd.notna(c_code) and '得意先コード' in sch_m.columns:
                                 t_m = sch_m[sch_m['得意先コード'] == c_code]
                         
-                        total_qty = 0
+                        calc_m_qty = 0
                         if not t_m.empty:
                             for _, row_m in t_m.iterrows():
                                 content_val = str(row_m.get('内容', '')).strip()
@@ -1131,13 +1118,14 @@ def main_app():
                                     continue 
                                 if not any(word in content_val for word in exclude_words):
                                     qty_val = row_m.get('数量', 0)
-                                    try: total_qty += int(float(qty_val)) if pd.notna(qty_val) else 0
+                                    try: calc_m_qty += int(float(qty_val)) if pd.notna(qty_val) else 0
                                     except: pass
                         
-                        if total_qty == 0:
-                            q = c_row.get(SCHEDULE_COL_TOTAL_QUANTITY, 0)
-                            try: total_qty = int(float(q)) if pd.notna(q) else 0
-                            except: total_qty = 0
+                        q = c_row.get(SCHEDULE_COL_TOTAL_QUANTITY, 0)
+                        try: p_qty = int(float(q)) if pd.notna(q) else 0
+                        except: p_qty = 0
+                        
+                        total_qty = max(p_qty, calc_m_qty)
 
                         c_prog = in_progress_df[in_progress_df['製品名'] == prod_name] if not in_progress_df.empty and '製品名' in in_progress_df.columns else pd.DataFrame()
                         c_comp = comp_df_all[comp_df_all['製品名'] == prod_name] if not comp_df_all.empty and '製品名' in comp_df_all.columns else pd.DataFrame()
@@ -1232,6 +1220,22 @@ def main_app():
                                         else:
                                             target_items[content_val] = {'会社名': content_val, '数量': qty}
                             
+                            # 【新規追加】親元（基本）分の差分を計算して自動追加する
+                            p_qty_raw = parent_row.get(SCHEDULE_COL_TOTAL_QUANTITY, 0)
+                            try: p_qty = int(float(p_qty_raw)) if pd.notna(p_qty_raw) else 0
+                            except: p_qty = 0
+                            
+                            m_total = sum(item['数量'] for item in target_items.values())
+                            diff_qty = p_qty - m_total
+                            
+                            if diff_qty > 0:
+                                p_name = parent_row.get('得意先名', '')
+                                parent_label = f"{p_name}（親元分）" if pd.notna(p_name) and p_name else "親元（基本）分"
+                                if parent_label in target_items:
+                                    target_items[parent_label]['数量'] += diff_qty
+                                else:
+                                    target_items[parent_label] = {'会社名': parent_label, '数量': diff_qty}
+
                             if not target_items:
                                 st.markdown("### 🔘 単体で登録（名入れがない場合）")
                                 st.info("このカレンダーには名入れが見つかりません。単体として登録します。")
@@ -1249,7 +1253,7 @@ def main_app():
                                             st.rerun()
                             else:
                                 st.markdown("### 📑 複数名入れの一括登録")
-                                st.success(f"{len(target_items)}件の名入れ先が見つかりました。")
+                                st.success(f"{len(target_items)}件の名入れ先（親元分含む）が見つかりました。")
                                 
                                 st.write("対象会社リスト（チェックして一括処理）")
                                 col1_sel, col2_sel, _ = st.columns([1, 1, 2])
@@ -1300,15 +1304,12 @@ def main_app():
                 st.markdown("<h3>カレンダー進行中一覧</h3>", unsafe_allow_html=True)
                 cal_d_df = in_progress_df.copy()
                 
-                # 予定表からカレンダーの品名を特定し、フラグが無くても合流させる強力なフィルタリング
                 is_cal_mask = pd.Series(False, index=cal_d_df.index) if not cal_d_df.empty else pd.Series(dtype=bool)
                 
                 if not cal_d_df.empty:
-                    # 1. 記録時のフラグ(is_calendar)による判定
                     if 'is_calendar' in cal_d_df.columns:
                         is_cal_mask = is_cal_mask | (cal_d_df['is_calendar'] == True)
                     
-                    # 2. 予定表の「適用＝カレンダー」に合致する品名なら強制的に含める
                     if '製品名' in cal_d_df.columns and not sch.empty and '品名' in sch.columns and SCHEDULE_COL_DETAILS in sch.columns:
                         sch['clean_品名'] = sch['品名'].apply(clean_text)
                         cal_sch_mask = sch[SCHEDULE_COL_DETAILS].astype(str).str.contains('カレンダー', na=False)
