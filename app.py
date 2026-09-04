@@ -9,29 +9,59 @@ import json
 import os
 import base64
 import io
+import re
+import urllib.request
+from urllib.error import URLError, HTTPError
 from PIL import Image
 
 st.set_page_config(page_title="製本記録アプリ", layout="wide")
 
-# 修正箇所: ここでCSSを一度だけ定義します。
+# CSSの定義
 st.markdown("""
 <style>
+/* 共通設定 */
 input, textarea, select { font-size: 16px !important; }
-/* スマホ画面（幅600px以下）でボタンを横並びにするためのクラス */
+
+/* ボタン内のテキストが2行に折り返されるのを防ぐ */
+button p {
+    white-space: nowrap !important;
+    margin-bottom: 0 !important;
+}
+
+/* スマホ画面（幅600px以下）のレイアウト調整 */
 @media (max-width: 600px) {
+    /* 1. スマホ画面全体の左右の余白を減らして画面を広く使う */
+    .block-container {
+        padding-left: 0.5rem !important;
+        padding-right: 0.5rem !important;
+    }
+
+    /* 2. ボタンの横並び設定の隙間を詰める */
     .button-container-row > div {
         display: flex;
         flex-direction: row !important;
-        gap: 0.5rem;
+        gap: 0.2rem !important;
     }
     .button-container-row > div > div {
         width: 33.33% !important;
     }
     .button-container-row button {
         width: 100% !important;
-        padding: 0.25rem 0.5rem !important;
-        font-size: 0.8rem !important;
+        padding: 0.2rem !important;
         min-height: 0px !important;
+    }
+    .button-container-row button p {
+        font-size: 0.75rem !important;
+    }
+
+    /* 3. 折りたたみ(Expander)のタイトルやその他の文字を少し小さくして1行に収まりやすくする */
+    button[data-baseweb="accordion-button"] div {
+        font-size: 0.85rem !important;
+        line-height: 1.2 !important;
+    }
+    
+    .stMarkdown p {
+        font-size: 0.85rem !important;
     }
 }
 </style>
@@ -41,6 +71,14 @@ components.html("""<script>const doc=window.parent.document; function d(){doc.qu
 def clean_text(text):
     if pd.isna(text): return ""
     return unicodedata.normalize('NFKC', str(text)).strip().replace(' ', '').replace('　', '')
+
+def convert_gdrive_url(url):
+    """Googleドライブの閲覧用URLを直接ダウンロード用URLに変換する"""
+    if url and "drive.google.com" in url:
+        match = re.search(r'/d/([a-zA-Z0-9_-]+)', url)
+        if match:
+            return f"https://drive.google.com/uc?export=download&id={match.group(1)}"
+    return url
 
 SCHEDULE_FILE = "schedule.csv"
 SCHEDULE_M_FILE = "schedule_m.csv"
@@ -69,7 +107,6 @@ ASAHIKAWA_MACHINES = {
     "丁合（カレンダー）": ["", "丁合機"],
     "綴じ（カレンダー）": ["", "タンザック620", "タンザック520"],
 }
-
 SAPPORO_MACHINES = {
     "断裁": ["", "断裁１号機"],
     "中綴じ": ["", "中綴じ１号機", "中綴じ２号機", "中綴じ３号機", "中綴じ４号機", "中綴じ５号機"],
@@ -78,7 +115,6 @@ SAPPORO_MACHINES = {
     "貼込": ["", "貼込み１号機"],
     "糸かがり": ["", "糸かがり１号機"],
 }
-
 WORKER_NAMES = [
     "赤松 浩明", "浅野 央詞", "小松 宣彦", "小山 輝義", "佐々木 善直", "藤井 康彰", "荒田 朋子", "川井 千代宝", "木原 裕治", "蟹谷 和豊", "高橋 誠", "大文字 俊幸",
     "青塚 知代", "早川 健太", "石井 美津枝", "山下 泉", "小島 広勝", "菅原 加奈", "神馬 妃那", "ディアン ファトクローマン", "インドラ アデ カマルディン", "ムハマド ユヌス", "岳　匠", "立川　悠依", 
@@ -86,6 +122,7 @@ WORKER_NAMES = [
 ]
 ASAHIKAWA_MEMBERS = WORKER_NAMES[:24]
 SAPPORO_MEMBERS = WORKER_NAMES[24:]
+
 WORKER_TO_LOCATION = {name: "旭川" for name in ASAHIKAWA_MEMBERS}
 WORKER_TO_LOCATION.update({name: "札幌" for name in SAPPORO_MEMBERS})
 WORKER_ID_MAP = {name: f"A{i+1:02d}" if name in ASAHIKAWA_MEMBERS else f"S{i-23:02d}" for i, name in enumerate(WORKER_NAMES)}
@@ -111,11 +148,30 @@ def init_firebase():
 def load_csv_data(file_path):
     if file_path == SCHEDULE_FILE and 'manual_schedule_df' in st.session_state: return st.session_state.manual_schedule_df
     if file_path == SCHEDULE_M_FILE and 'manual_schedule_m_df' in st.session_state: return st.session_state.manual_schedule_m_df
-    if file_path == SCHEDULE_FILE and "SCHEDULE_CSV_URL" in st.secrets and st.secrets["SCHEDULE_CSV_URL"]:
-        try: return pd.read_csv(st.secrets["SCHEDULE_CSV_URL"], encoding="utf-8-sig")
-        except: pass 
-    try: return pd.read_csv(file_path, encoding="utf-8-sig")
-    except: return pd.DataFrame()
+    
+    url_secret_key = "SCHEDULE_CSV_URL" if file_path == SCHEDULE_FILE else "SCHEDULE_M_CSV_URL"
+    if url_secret_key in st.secrets and st.secrets[url_secret_key]:
+        raw_url = st.secrets[url_secret_key]
+        url = convert_gdrive_url(raw_url)
+        try:
+            req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
+            with urllib.request.urlopen(req) as response:
+                content = response.read()
+                try:
+                    return pd.read_csv(io.BytesIO(content), encoding="utf-8-sig")
+                except UnicodeDecodeError:
+                    return pd.read_csv(io.BytesIO(content), encoding="cp932", encoding_errors="replace")
+        except Exception as e:
+            st.error(f"⚠️ {file_path} のURL読み込みに失敗しました: {e}")
+            pass # エラー時はローカルファイルを試す
+
+    try:
+        try:
+            return pd.read_csv(file_path, encoding="utf-8-sig")
+        except UnicodeDecodeError:
+            return pd.read_csv(file_path, encoding="cp932", encoding_errors="replace")
+    except:
+        return pd.DataFrame()
 
 @st.cache_data(ttl=600)
 def load_from_firestore(_db, collection_name, active_only=False, days_limit=None):
@@ -213,11 +269,12 @@ def process_form(is_edit_mode=False, default_data=None, view_key='sub_view', is_
             info = product_row.iloc[0]
             amt = info.get(SCHEDULE_COL_AMOUNT, 0)
             rmks = " | ".join([str(info[c]) for c in SCHEDULE_COL_REMARKS if c in info and pd.notna(info[c])])
-            st.info("\n\n".join([f"**{k}:** {str(v).replace('*', '\*')}" for k, v in {"総数": info.get(SCHEDULE_COL_TOTAL_QUANTITY, ""), "受注金額": f"{int(amt):,}円" if pd.notna(amt) else "", "適用": info.get(SCHEDULE_COL_DETAILS, ""), "納期日付": info.get(SCHEDULE_COL_DUE_DATE, ""), "納期時間": info.get(SCHEDULE_COL_DELIVERY_TIME, ""), "備考": rmks}.items() if pd.notna(v) and str(v).strip() != ""]))
+            st.info("\n\n".join([f"**{k}:** {str(v).replace('*', '\\*')}" for k, v in {"総数": info.get(SCHEDULE_COL_TOTAL_QUANTITY, ""), "受注金額": f"{int(amt):,}円" if pd.notna(amt) else "", "適用": info.get(SCHEDULE_COL_DETAILS, ""), "納期日付": info.get(SCHEDULE_COL_DUE_DATE, ""), "納期時間": info.get(SCHEDULE_COL_DELIVERY_TIME, ""), "備考": rmks}.items() if pd.notna(v) and str(v).strip() != ""]))
     
     def to_time_obj(t_str):
         try: return datetime.strptime(t_str, '%H:%M').time() if t_str else None
         except: return None
+        
     with st.form(key='process_form'):
         user_loc = st.session_state.get('user_location', "未設定")
         detail_val = default_data.get('詳細', '')
@@ -226,6 +283,7 @@ def process_form(is_edit_mode=False, default_data=None, view_key='sub_view', is_
         work_mins_in = 0
         setup_procs, rot_procs = ["中綴じ", "折", "無線綴じ", "糸かがり", "綴じ（カレンダー）", "丁合（カレンダー）"], ["折", "中綴じ", "無線綴じ", "ミシン・スジ", "貼込", "綴じ（カレンダー）", "丁合（カレンダー）"]
         set_w, set_t, rot_s, mach_sel = 0.0, 0, 0, ""
+        
         st.subheader("機械情報")
         is_setup_only = st.checkbox("🔧 セット作業のみ", value=(is_edit_mode and int(default_data.get('出来数', 1)) == 0))
         
@@ -255,9 +313,9 @@ def process_form(is_edit_mode=False, default_data=None, view_key='sub_view', is_
         st.subheader("作業実績")
         
         if is_bulk:
-            total_qty = sum(item.get('出来数', 0) for item in bulk_items)
+            total_qty = sum(int(item.get('出来数', 0)) for item in bulk_items)
             qty = st.number_input("出来数（チェックした項目の合計）", min_value=0, value=int(total_qty), disabled=True)
-            st.info("※一括登録のため、出来数は各会社の合算値が表示されています。")
+            st.info("※一括登録のため、出来数は各会社の合算値が表示されています。時間は部数に応じて按分されて記録されます。")
         else:
             qty = 0 if is_setup_only else st.number_input("出来数", min_value=0, step=1, value=int(default_data.get('出来数', 0)), disabled=is_setup_only)
         
@@ -344,14 +402,23 @@ def process_form(is_edit_mode=False, default_data=None, view_key='sub_view', is_
             }
             
             if is_bulk:
-                wm_per = int(wm / len(bulk_items)) if wm > 0 else 0
+                total_qty_bulk = sum(int(item.get('出来数', 0)) for item in bulk_items)
                 def op():
                     b = firestore.client().batch()
                     for i, item in enumerate(bulk_items):
+                        item_qty = int(item.get('出来数', 0))
+                        # 部数に応じて時間を按分する
+                        assigned_time = 0
+                        if wm > 0:
+                            if total_qty_bulk > 0:
+                                assigned_time = int(wm * (item_qty / total_qty_bulk))
+                            else:
+                                assigned_time = int(wm / len(bulk_items))
+
                         f = base_f_data.copy()
                         f.update({
                             "記録ID": f"{datetime.now().strftime('%Y%m%d%H%M%S%f')}_{i}",
-                            "製品名": product_name, "詳細": item.get('詳細', ''), "作業時間_分": wm_per, "出来数": int(item.get('出来数', 0))
+                            "製品名": product_name, "詳細": item.get('詳細', ''), "作業時間_分": assigned_time, "出来数": item_qty
                         })
                         if status == "完了":
                             f['完了日時'] = firestore.SERVER_TIMESTAMP
@@ -359,7 +426,7 @@ def process_form(is_edit_mode=False, default_data=None, view_key='sub_view', is_
                         else:
                             b.set(firestore.client().collection("in_progress").document(), f)
                     b.commit()
-                handle_db_write(op, f"✅ {len(bulk_items)}件を一括で{status}として登録しました。", "一括登録中にエラー", view_key=view_key)
+                handle_db_write(op, f"✅ {len(bulk_items)}件を一括で{status}として登録しました。（時間按分済）", "一括登録中にエラー", view_key=view_key)
             else:
                 f_data = base_f_data.copy()
                 f_data.update({
@@ -444,7 +511,6 @@ def show_daily_report():
         with st.expander("提出内容を確認"):
             st.write(f"- 機械: {sub_rep.get('機械の調子','')}\n- ヒヤリ: {sub_rep.get('ヒヤリハット','')}\n- 特記: {sub_rep.get('特記事項','')}")
     
-    # ここが今回のエラー修正箇所です。NaN(float)を安全に除外して判定します。
     t_tasks = pd.DataFrame()
     if not all_df.empty and '作成日時_dt' in all_df.columns:
         d_df = all_df[all_df['作成日時_dt'].dt.date == t_date]
@@ -764,6 +830,9 @@ def show_admin_dashboard():
             target_product = st.selectbox("予定表(CSV)の品名", [""] + official_products)
             manual_target = st.text_input("または、手動で正しい品名を入力", help="プルダウンに無い場合はこちらに入力してください")
             
+            st.write("**変更後の詳細（名入れ先など）※任意**")
+            target_detail = st.text_input("詳細を一括で上書きする場合", help="現場が間違って入力した名入れ先を、正しい会社名に直す場合などに入力します。")
+            
         final_target = manual_target if manual_target else target_product
         
         if source_product and not source_product.startswith("（"):
@@ -785,10 +854,10 @@ def show_admin_dashboard():
                 st.error("変更元の品名を正しく選択してください。")
             elif not final_target:
                 st.error("変更先の品名を入力または選択してください。")
-            elif source_product == final_target:
-                st.error("変更元と変更先が同じです。")
+            elif source_product == final_target and not target_detail:
+                st.error("変更内容（品名か詳細）を入力してください。")
             else:
-                with st.spinner(f"「{source_product}」を「{final_target}」に変更中..."):
+                with st.spinner(f"「{source_product}」を変更中..."):
                     try:
                         target_rows = all_tasks_df[all_tasks_df['製品名'] == source_product]
                         if target_rows.empty:
@@ -803,23 +872,31 @@ def show_admin_dashboard():
                                 col_name = row.get('_collection')
                                 if col_name and doc_id:
                                     doc_ref = db_batch.collection(col_name).document(doc_id)
-                                    batch.update(doc_ref, {"製品名": final_target})
+                                    
+                                    # 品名の更新に加え、詳細(名入れ)も入力されていれば更新する
+                                    update_data = {"製品名": final_target}
+                                    if target_detail:
+                                        update_data["詳細"] = target_detail.strip()
+                                        update_data["is_calendar"] = True # カレンダーとして強制認識
+                                        
+                                    batch.update(doc_ref, update_data)
                                     update_count += 1
                                     
                             if update_count > 0:
                                 batch.commit()
-                                st.session_state.success_msg = f"✅ {update_count}件の作業記録を「{final_target}」に書き換えました！"
+                                detail_msg = f"（詳細を「{target_detail}」に上書きしました）" if target_detail else ""
+                                st.session_state.success_msg = f"✅ {update_count}件の作業記録を「{final_target}」に書き換えました！{detail_msg}"
                                 load_from_firestore.clear()
                                 load_tasks_for_customer.clear()
                                 st.rerun()
                     except Exception as e:
                         st.error(f"更新中にエラーが発生しました: {e}")
+
 def render_step1(schedule_df, display_df, selected_location, product_to_location):
     st.markdown(f"<h3>Step 1: 新規工程を記録（{selected_location}）</h3>", unsafe_allow_html=True)
     f_sch = schedule_df[schedule_df['拠点'] == selected_location] if selected_location != "すべて" and not schedule_df.empty and '拠点' in schedule_df.columns else schedule_df.copy()
     c_names = sorted(f_sch['得意先名'].dropna().unique().tolist()) if not f_sch.empty and '得意先名' in f_sch.columns else []
     
-    # 選択する得意先の初期値を決定
     default_customer = "すべての得意先"
     preselected_product = st.session_state.get('product_to_select', "")
     if preselected_product and not f_sch.empty and '品名' in f_sch.columns:
@@ -828,8 +905,8 @@ def render_step1(schedule_df, display_df, selected_location, product_to_location
             customer = match.iloc[0].get('得意先名')
             if pd.notna(customer) and customer in c_names:
                 default_customer = customer
-
     sel_c = st.selectbox("得意先名で絞り込み", ["すべての得意先"] + c_names, index=(["すべての得意先"] + c_names).index(default_customer))
+    
     with st.form("selection_form"):
         p_df = f_sch[f_sch['得意先名'] == sel_c] if sel_c != "すべての得意先" else f_sch.copy()
         s_prods = p_df['品名'].dropna().unique().tolist() if not p_df.empty and '品名' in p_df.columns else []
@@ -843,7 +920,6 @@ def render_step1(schedule_df, display_df, selected_location, product_to_location
         if preselected_product and preselected_product not in opts:
             opts.append(preselected_product)
         
-        # product_to_select があれば初期値にセット
         default_index = opts.index(preselected_product) if preselected_product in opts else 0
         sel_p = st.selectbox("製品を選択", opts, index=default_index)
         
@@ -858,13 +934,10 @@ def render_step1(schedule_df, display_df, selected_location, product_to_location
                 st.session_state.selected_product = fin_p
                 st.session_state.selected_process = sel_proc
                 st.session_state.sub_view = 'INPUT_FORM'
-                # 処理が終わったらクリア
                 if 'product_to_select' in st.session_state: del st.session_state.product_to_select
                 st.rerun()
 
 def main_app():
-    # 修正: メニュー切り替え時などに product_to_select を消さないようにここでの clear は削除
-    # if 'product_to_select' in st.session_state: del st.session_state.product_to_select
     if 'success_msg' in st.session_state: st.success(st.session_state.pop('success_msg'))
     
     st.sidebar.success(f"ログイン: **{st.session_state.logged_in_user}**")
@@ -977,11 +1050,9 @@ def main_app():
                         schedule_df['clean_品名_lookup'] = schedule_df['品名'].apply(clean_text)
                         for _, row in schedule_df.iterrows():
                             schedule_lookup[row['clean_品名_lookup']] = row.get(SCHEDULE_COL_DUE_DATE, "")
-
                     for p, g in d_df.groupby('製品名'):
                         due_date = schedule_lookup.get(clean_text(p), "")
                         due_badge = f" 📅 納期:{due_date}" if pd.notna(due_date) and str(due_date).strip() != "" else ""
-
                         with st.expander(f"**{p}**{due_badge}"):
                             c1, c2 = st.columns(2)
                             if c1.button("工程追加", key=f"a_{p}"): st.session_state.product_to_select, st.session_state.scroll_to_top = p, True; st.rerun()
@@ -996,10 +1067,8 @@ def main_app():
                                         pass
                                 start_t = r.get('開始時間', '')
                                 time_badge = f"🕒 {work_date_str} {start_t}~" if start_t else f"🕒 {work_date_str}"
-
                                 st.caption(f"{time_badge} | {r['工程名']} / 出来数: {r['出来数']}個 / 入力: {r.get('入力者名','')}")
                                 
-                                # 修正箇所: ここでループ内にCSSを埋め込むのをやめ、シンプルにクラスだけ適用します。
                                 st.markdown('<div class="button-container-row">', unsafe_allow_html=True)
                                 cx, cy, cz = st.columns([1, 1, 1])
                                 if cx.button("編集", key=f"e_{r['id']}", use_container_width=True): st.session_state.record_to_edit, st.session_state.sub_view = r.to_dict(), 'EDIT_FORM'; st.rerun()
@@ -1079,6 +1148,36 @@ def main_app():
                                         else:
                                             target_items[content_val] = {'会社名': content_val, '数量': qty}
                             
+                            comp_df_all = load_from_firestore(db, "completed", days_limit=3000)
+                            cal_prog = in_progress_df[in_progress_df['製品名'] == p_prod] if not in_progress_df.empty and '製品名' in in_progress_df.columns else pd.DataFrame()
+                            cal_comp = comp_df_all[comp_df_all['製品名'] == p_prod] if not comp_df_all.empty and '製品名' in comp_df_all.columns else pd.DataFrame()
+
+                            st.markdown("##### 📈 全体進捗")
+                            proc_cols = ["断裁", "丁合", "綴じ", "梱包"]
+                            cols = st.columns(len(proc_cols))
+                            
+                            for idx, proc_name in enumerate(proc_cols):
+                                c_qty = 0
+                                if not cal_comp.empty and '工程名' in cal_comp.columns:
+                                    c_qty += pd.to_numeric(cal_comp[cal_comp['工程名'].str.contains(proc_name, na=False)]['出来数'], errors='coerce').sum()
+                                if not cal_prog.empty and '工程名' in cal_prog.columns:
+                                    c_qty += pd.to_numeric(cal_prog[cal_prog['工程名'].str.contains(proc_name, na=False)]['出来数'], errors='coerce').sum()
+                                    
+                                total_qty = sum(item['数量'] for item in target_items.values()) if target_items else parent_row.get(SCHEDULE_COL_TOTAL_QUANTITY, 0)
+                                try: total_qty = int(float(total_qty)) if pd.notna(total_qty) else 0
+                                except: total_qty = 0
+                                
+                                is_done = False
+                                if total_qty > 0:
+                                    if c_qty >= (total_qty * 0.9): is_done = True
+                                elif c_qty > 0:
+                                    is_done = True
+                                    
+                                status_icon = "✅ 済" if is_done else "➖"
+                                with cols[idx]:
+                                    st.markdown(f"**{proc_name}**<br><span style='font-size:1.2rem;'>{status_icon}</span>", unsafe_allow_html=True)
+                            st.divider()
+
                             if not target_items:
                                 st.markdown("### 🔘 単体で登録（名入れがない場合）")
                                 st.info("このカレンダーには名入れが見つかりません。単体として登録します。")
@@ -1096,7 +1195,7 @@ def main_app():
                                             st.rerun()
                             else:
                                 st.markdown("### 📑 複数名入れの一括登録")
-                                st.success(f"{len(target_items)}件の名入れ先（費用項目を除外済）が見つかりました。")
+                                st.success(f"{len(target_items)}件の名入れ先が見つかりました。")
                                 
                                 st.write("対象会社リスト（チェックして一括処理）")
                                 col1_sel, col2_sel, _ = st.columns([1, 1, 2])
@@ -1108,7 +1207,6 @@ def main_app():
                                     for comp in target_items.keys():
                                         st.session_state[f"cal_chk_{comp}"] = False
                                     st.rerun()
-
                                 checked_comps = []
                                 is_single_item = (len(target_items) == 1)
                                 for comp, info in target_items.items():
@@ -1156,7 +1254,7 @@ def main_app():
                     st.info("作業中のカレンダーはありません。")
                 else:
                     for p, g in cal_d_df.groupby('製品名'):
-                        with st.expander(f"**{p}**", expanded=True):
+                        with st.expander(f"**{p}**", expanded=False):
                             c_btn = st.button("親ごと完了", key=f"c_cal_{p}", type="primary")
                             if c_btn: handle_product_completion(p, view_key='cal_sub_view')
                             for _, r in g.iterrows():
@@ -1164,7 +1262,6 @@ def main_app():
                                 dtl_str = f" - {dtls}" if dtls else ""
                                 st.caption(f"{r['工程名']}{dtl_str} / 出来数: {r['出来数']}個 / 入力: {r.get('入力者名','')}")
                                 
-                                # 修正箇所: ここも同様にシンプルにクラスだけ適用します。
                                 st.markdown('<div class="button-container-row">', unsafe_allow_html=True)
                                 cx, cy, cz = st.columns(3)
                                 if cx.button("編集", key=f"e_cal_{r['id']}", use_container_width=True): st.session_state.cal_record_to_edit, st.session_state.cal_sub_view = r.to_dict(), 'EDIT_FORM'; st.rerun()
@@ -1180,8 +1277,6 @@ def main_app():
         show_admin_dashboard()
 
 st.markdown("<h1>📘 製本記録アプリ</h1>", unsafe_allow_html=True)
-
-# 修正箇所: window.parent.scrollTo を使用して、スマホの画面全体を確実に一番上までスムーズにスクロールさせます。
 if st.session_state.get('scroll_to_top'):
     components.html("<script>window.parent.scrollTo({top: 0, behavior: 'smooth'});</script>", height=0, width=0)
     st.session_state.scroll_to_top = False
@@ -1192,6 +1287,7 @@ if 'logged_in_user' not in st.session_state:
     if hasattr(st, 'query_params') and st.query_params.get("uid") in ID_TO_WORKER:
         st.session_state.logged_in_user = ID_TO_WORKER[st.query_params.get("uid")]
         st.session_state.user_location = WORKER_TO_LOCATION.get(st.session_state.logged_in_user, "すべて")
+
 if 'logged_in_user' in st.session_state:
     if st.session_state.get("just_logged_in"): show_bookmark_page(st.session_state.logged_in_user)
     else: main_app()
