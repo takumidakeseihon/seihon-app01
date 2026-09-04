@@ -19,49 +19,22 @@ st.set_page_config(page_title="製本記録アプリ", layout="wide")
 # CSSの定義
 st.markdown("""
 <style>
-/* 共通設定 */
 input, textarea, select { font-size: 16px !important; }
-
-/* ボタン内のテキストが2行に折り返されるのを防ぐ */
-button p {
-    white-space: nowrap !important;
-    margin-bottom: 0 !important;
-}
-
-/* スマホ画面（幅600px以下）のレイアウト調整 */
+/* スマホ画面（幅600px以下）でボタンを横並びにするためのクラス */
 @media (max-width: 600px) {
-    /* 1. スマホ画面全体の左右の余白を減らして画面を広く使う */
-    .block-container {
-        padding-left: 0.5rem !important;
-        padding-right: 0.5rem !important;
-    }
-
-    /* 2. ボタンの横並び設定の隙間を詰める */
     .button-container-row > div {
         display: flex;
         flex-direction: row !important;
-        gap: 0.2rem !important;
+        gap: 0.5rem;
     }
     .button-container-row > div > div {
         width: 33.33% !important;
     }
     .button-container-row button {
         width: 100% !important;
-        padding: 0.2rem !important;
+        padding: 0.25rem 0.5rem !important;
+        font-size: 0.8rem !important;
         min-height: 0px !important;
-    }
-    .button-container-row button p {
-        font-size: 0.75rem !important;
-    }
-
-    /* 3. 折りたたみ(Expander)のタイトルやその他の文字を少し小さくして1行に収まりやすくする */
-    button[data-baseweb="accordion-button"] div {
-        font-size: 0.85rem !important;
-        line-height: 1.2 !important;
-    }
-    
-    .stMarkdown p {
-        font-size: 0.85rem !important;
     }
 }
 </style>
@@ -1096,12 +1069,81 @@ def main_app():
             sch = load_csv_data(SCHEDULE_FILE)
             sch_m = load_csv_data(SCHEDULE_M_FILE)
             
+            # --- 新機能: 一部でも済になっているカレンダーの一覧抽出 ---
+            cal_sch = pd.DataFrame()
+            if not sch.empty:
+                cal_sch = sch[sch[SCHEDULE_COL_DETAILS].astype(str).str.contains('カレンダー', na=False)] if SCHEDULE_COL_DETAILS in sch.columns else pd.DataFrame()
+                if not cal_sch.empty:
+                    done_calendars = []
+                    comp_df_all = load_from_firestore(db, "completed", days_limit=3000)
+                    denpyo_col = next((col for col in sch.columns if '伝票' in col), None)
+                    denpyo_m_col = next((col for col in sch_m.columns if '伝票' in col), None)
+                    exclude_words = ["区分け", "包代", "包装", "パレット", "箱代", "PUR", "送料", "運賃", "ダンボール", "段ボール", "値引き", "手数料"]
+
+                    for _, c_row in cal_sch.iterrows():
+                        prod_name = c_row['品名']
+                        if pd.isna(prod_name) or prod_name in done_calendars: continue
+
+                        t_m = pd.DataFrame()
+                        if denpyo_col and denpyo_m_col:
+                            denpyo_val = c_row.get(denpyo_col)
+                            if pd.notna(denpyo_val):
+                                t_m = sch_m[sch_m[denpyo_m_col] == denpyo_val]
+                        else:
+                            c_code = c_row.get('得意先コード')
+                            if pd.notna(c_code) and '得意先コード' in sch_m.columns:
+                                t_m = sch_m[sch_m['得意先コード'] == c_code]
+                        
+                        total_qty = 0
+                        if not t_m.empty:
+                            for _, row_m in t_m.iterrows():
+                                content_val = str(row_m.get('内容', '')).strip()
+                                if content_val == 'nan' or not content_val:
+                                    content_val = str(row_m.get('納品書明細', '')).strip()
+                                if content_val == 'nan' or not content_val:
+                                    continue 
+                                if not any(word in content_val for word in exclude_words):
+                                    qty_val = row_m.get('数量', 0)
+                                    try: total_qty += int(float(qty_val)) if pd.notna(qty_val) else 0
+                                    except: pass
+                        
+                        if total_qty == 0:
+                            q = c_row.get(SCHEDULE_COL_TOTAL_QUANTITY, 0)
+                            try: total_qty = int(float(q)) if pd.notna(q) else 0
+                            except: total_qty = 0
+
+                        c_prog = in_progress_df[in_progress_df['製品名'] == prod_name] if not in_progress_df.empty and '製品名' in in_progress_df.columns else pd.DataFrame()
+                        c_comp = comp_df_all[comp_df_all['製品名'] == prod_name] if not comp_df_all.empty and '製品名' in comp_df_all.columns else pd.DataFrame()
+
+                        has_done_proc = False
+                        for proc_name in ["断裁", "丁合", "綴じ", "梱包"]:
+                            c_qty = 0
+                            if not c_comp.empty and '工程名' in c_comp.columns:
+                                c_qty += pd.to_numeric(c_comp[c_comp['工程名'].str.contains(proc_name, na=False)]['出来数'], errors='coerce').sum()
+                            if not c_prog.empty and '工程名' in c_prog.columns:
+                                c_qty += pd.to_numeric(c_prog[c_prog['工程名'].str.contains(proc_name, na=False)]['出来数'], errors='coerce').sum()
+                            
+                            if total_qty > 0:
+                                if c_qty >= (total_qty * 0.9):
+                                    has_done_proc = True
+                                    break
+                            elif c_qty > 0:
+                                has_done_proc = True
+                                break
+                        
+                        if has_done_proc:
+                            done_calendars.append(prod_name)
+                    
+                    if done_calendars:
+                        st.markdown("##### ✅ いずれかの工程が完了したカレンダー")
+                        st.info("、 ".join(done_calendars))
+                        st.divider()
+            
             c_left, c_right = st.columns([1.3, 1])
             with c_left:
                 if sch.empty: 
                     st.warning("予定表CSV が読み込めません。（サイドバーからアップロードしてください）")
                 else:
-                    cal_sch = sch[sch[SCHEDULE_COL_DETAILS].astype(str).str.contains('カレンダー', na=False)] if SCHEDULE_COL_DETAILS in sch.columns else pd.DataFrame()
                     if cal_sch.empty: 
                         st.info("予定表に「カレンダー」指定の案件がありません。")
                     else:
