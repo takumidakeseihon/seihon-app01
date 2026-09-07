@@ -35,11 +35,44 @@ input, textarea, select { font-size: 16px !important; }
         padding: 0.25rem 0.5rem !important;
         font-size: 0.8rem !important;
         min-height: 0px !important;
+        white-space: nowrap !important;
+    }
+    h2, h3, h5 {
+        font-size: clamp(0.9rem, 4vw, 1.3rem) !important;
+    }
+    .stSelectbox label, .stTextInput label, .stNumberInput label {
+        font-size: 0.85rem !important;
+    }
+    /* 左右の余白を詰める */
+    .block-container {
+        padding-left: 1rem !important;
+        padding-right: 1rem !important;
     }
 }
 </style>
 """, unsafe_allow_html=True)
-components.html("""<script>const doc=window.parent.document; function d(){doc.querySelectorAll('div[data-baseweb="select"] input').forEach(i=>{if(i.getAttribute('inputmode')!=='none')i.setAttribute('inputmode','none');});} d(); new MutationObserver(d).observe(doc.body,{childList:true,subtree:true});</script>""", height=0, width=0)
+
+# スマホの自動翻訳（おせっかい翻訳）を無効化するスクリプトと、キーボードサジェスト無効化
+components.html("""<script>
+const doc = window.parent.document;
+// 自動翻訳を禁止する属性をHTML全体に付与
+doc.documentElement.setAttribute('translate', 'no');
+doc.documentElement.classList.add('notranslate');
+if(!doc.querySelector('meta[name="google"][content="notranslate"]')){
+    const meta = doc.createElement('meta');
+    meta.name = 'google';
+    meta.content = 'notranslate';
+    doc.head.appendChild(meta);
+}
+// スマホの選択肢入力時のキーボード表示を防ぐ
+function d(){
+    doc.querySelectorAll('div[data-baseweb="select"] input').forEach(i=>{
+        if(i.getAttribute('inputmode')!=='none')i.setAttribute('inputmode','none');
+    });
+} 
+d(); 
+new MutationObserver(d).observe(doc.body,{childList:true,subtree:true});
+</script>""", height=0, width=0)
 
 def clean_text(text):
     if pd.isna(text): return ""
@@ -262,7 +295,7 @@ def process_form(is_edit_mode=False, default_data=None, view_key='sub_view', is_
         try: return datetime.strptime(t_str, '%H:%M').time() if t_str else None
         except: return None
         
-    with st.form(key='process_form'):
+    with st.container():
         user_loc = st.session_state.get('user_location', "未設定")
         detail_val = default_data.get('詳細', '')
         st_time_obj = to_time_obj(default_data.get('開始時間'))
@@ -301,7 +334,7 @@ def process_form(is_edit_mode=False, default_data=None, view_key='sub_view', is_
         
         if is_bulk:
             total_qty = sum(int(item.get('出来数', 0)) for item in bulk_items)
-            # 出来数を手動で編集可能に変更。デフォルトは合算値
+            # 出来数を手動で編集可能に変更。デフォルトは各アイテムの合算値
             qty = st.number_input("出来数（一括登録の合計）", min_value=0, value=int(total_qty))
             st.info("※手動で出来数を修正した場合、各会社の部数比率に応じて自動で按分されて記録されます。時間は部数に応じて按分されて記録されます。")
         else:
@@ -345,20 +378,72 @@ def process_form(is_edit_mode=False, default_data=None, view_key='sub_view', is_
             fin_dtl = str(st.number_input("ページ数／枚数", min_value=0, step=1, value=d_pgs))
             st_o = st.time_input(st_label, step=600, value=st_time_obj, disabled=is_setup_only)
             en_o = st.time_input("終了時間", step=600, value=en_time_obj, disabled=is_setup_only)
-        elif process_name == "梱包":
-            d_pt, d_ip, d_bc = "", 0, 0
-            if is_edit_mode and detail_val:
-                dtls = detail_val.split(" | ")
-                d_pt = dtls[0] if dtls else ""
-                for i in dtls[1:]:
-                    if "個/包" in i: d_ip = int(i.replace("個/包", "").strip())
-                    elif "箱" in i: d_bc = int(i.replace("箱", "").strip())
-            pt = st.selectbox("作業内容", ["", "包装+箱", "包装のみ", "箱入れのみ", "結束"], index=["", "包装+箱", "包装のみ", "箱入れのみ", "結束"].index(d_pt) if d_pt in ["", "包装+箱", "包装のみ", "箱入れのみ", "結束"] else 0)
-            ip = st.number_input("一包みの入数", min_value=0, step=1, value=d_ip) if "包装" in pt or "結束" in pt else 0
-            bc = st.number_input("箱の数", min_value=0, step=1, value=d_bc) if "箱" in pt else 0
-            d_list = [pt]
+        elif process_name in ["梱包", "綴じ+梱包"]:
+            d_pt, d_ip, d_bc, d_btype, d_borigin = "", 0, 0, "", ""
+            preserved_details = []
+            if detail_val:
+                dtls = [x.strip() for x in detail_val.split(" | ")]
+                for i in dtls:
+                    if i in ["包装+箱", "包装のみ", "箱入れのみ", "結束"]: 
+                        d_pt = i
+                    elif "個/包" in i: 
+                        try: d_ip = int(i.replace("個/包", "").strip())
+                        except: preserved_details.append(i)
+                    elif i.endswith("箱") and "種類:" not in i and "手配:" not in i:
+                        try: d_bc = int(i.replace("箱", "").strip())
+                        except: preserved_details.append(i)
+                    elif "種類:" in i: 
+                        d_btype = i.replace("種類:", "").strip()
+                    elif "手配:" in i: 
+                        d_borigin = i.replace("手配:", "").strip()
+                    else:
+                        if i: preserved_details.append(i)
+            
+            d_other = st.text_input("会社名 / その他詳細", value=" | ".join(preserved_details), placeholder="例: 〇〇会社") if is_edit_mode or preserved_details else ""
+            
+            pt = st.selectbox("作業内容（大分類）", ["", "包装+箱", "包装のみ", "箱入れのみ", "結束"], index=["", "包装+箱", "包装のみ", "箱入れのみ", "結束"].index(d_pt) if d_pt in ["", "包装+箱", "包装のみ", "箱入れのみ", "結束"] else 0)
+            
+            st.markdown("<span style='font-size:0.9rem; color:#555;'>▼ 以下は必要な項目のみ入力してください</span>", unsafe_allow_html=True)
+            c_p1, c_p2 = st.columns(2)
+            with c_p1:
+                ip = st.number_input("一包みの入数（部/包）", min_value=0, step=1, value=d_ip)
+            with c_p2:
+                bc = st.number_input("箱の数", min_value=0, step=1, value=d_bc)
+            
+            c_b1, c_b2 = st.columns(2)
+            with c_b1:
+                BOX_TYPES = ["", "小林印刷用箱", "B3（364）カレンダー", "A2カレンダー", "B3（380）カレンダー", "B2カレンダー", "その他（手入力）"]
+                d_btype_safe = d_btype if d_btype in BOX_TYPES else "その他（手入力）" if d_btype else ""
+                box_type_sel = st.selectbox("箱の種類", BOX_TYPES, index=BOX_TYPES.index(d_btype_safe))
+                if box_type_sel == "その他（手入力）":
+                    box_type = st.text_input("箱の種類を手入力", value=d_btype if d_btype not in BOX_TYPES else "", placeholder="例: B2用段ボール")
+                else:
+                    box_type = box_type_sel
+                    
+            with c_b2:
+                BOX_ORIGIN_MAP = {
+                    "小林印刷用箱": "支給箱",
+                    "B3（364）カレンダー": "自社手配箱",
+                    "A2カレンダー": "自社手配箱",
+                    "B3（380）カレンダー": "自社手配箱",
+                    "B2カレンダー": "自社手配箱"
+                }
+                origin_opts = ["", "支給箱", "自社手配箱"]
+                d_borigin_safe = "支給箱" if "支給" in d_borigin else "自社手配箱" if "自社" in d_borigin else "" if not d_borigin else d_borigin
+                
+                # 箱の種類に応じて手配を自動ロック
+                if box_type_sel in BOX_ORIGIN_MAP:
+                    box_origin = st.selectbox("箱の手配", origin_opts, index=origin_opts.index(BOX_ORIGIN_MAP[box_type_sel]), disabled=True)
+                else:
+                    box_origin = st.selectbox("箱の手配", origin_opts, index=origin_opts.index(d_borigin_safe) if d_borigin_safe in origin_opts else 0)
+
+            d_list = [d_other] if d_other else []
+            if pt: d_list.append(pt)
             if ip > 0: d_list.append(f"{ip}個/包")
             if bc > 0: d_list.append(f"{bc}箱")
+            if box_type: d_list.append(f"種類:{box_type}")
+            if box_origin: d_list.append(f"手配:{box_origin}")
+            
             fin_dtl = " | ".join(d for d in d_list if d)
             st_o = st.time_input("開始時間", step=600, value=st_time_obj, disabled=is_setup_only)
             en_o = st.time_input("終了時間", step=600, value=en_time_obj, disabled=is_setup_only)
@@ -369,9 +454,9 @@ def process_form(is_edit_mode=False, default_data=None, view_key='sub_view', is_
         rmks = st.text_area("備考", value=default_data.get('備考', ''))
         
         cb1, cb2, cb3 = st.columns([1.2, 1.2, 2])
-        btn_sub = cb1.form_submit_button("更新する" if is_edit_mode else "作業中として追加", type="primary" if is_edit_mode else "secondary", use_container_width=True)
-        btn_com = None if is_edit_mode else cb2.form_submit_button("この内容で最終完了", type="primary", use_container_width=True)
-        if cb3.form_submit_button("キャンセル"):
+        btn_sub = cb1.button("更新する" if is_edit_mode else "作業中として追加", type="primary" if is_edit_mode else "secondary", use_container_width=True)
+        btn_com = None if is_edit_mode else cb2.button("この内容で最終完了", type="primary", use_container_width=True)
+        if cb3.button("キャンセル"):
             st.session_state[view_key] = 'SELECT_PROCESS' if view_key == 'sub_view' else 'SELECT'
             st.session_state.pop('record_to_copy', None)
             st.session_state.pop('cal_record_to_copy', None)
@@ -430,10 +515,19 @@ def process_form(is_edit_mode=False, default_data=None, view_key='sub_view', is_
                                 assigned_time = int(wm / len(bulk_items))
                         current_time_sum += assigned_time
 
+                        # 会社名等の既存の詳細に、梱包等の入力情報（fin_dtl）を結合する
+                        final_item_detail = str(item.get('詳細', '')).strip()
+                        fin_dtl_str = str(fin_dtl).strip()
+                        if fin_dtl_str and fin_dtl_str not in ["", "0", "0.0"]:
+                            if final_item_detail:
+                                final_item_detail = f"{final_item_detail} | {fin_dtl_str}"
+                            else:
+                                final_item_detail = fin_dtl_str
+
                         f = base_f_data.copy()
                         f.update({
                             "記録ID": f"{datetime.now().strftime('%Y%m%d%H%M%S%f')}_{i}",
-                            "製品名": product_name, "詳細": item.get('詳細', ''), "作業時間_分": assigned_time, "出来数": item_qty
+                            "製品名": product_name, "詳細": final_item_detail, "作業時間_分": assigned_time, "出来数": item_qty
                         })
                         if status == "完了":
                             f['完了日時'] = firestore.SERVER_TIMESTAMP
@@ -936,7 +1030,18 @@ def render_step1(schedule_df, display_df, selected_location, product_to_location
             opts.append(preselected_product)
         
         default_index = opts.index(preselected_product) if preselected_product in opts else 0
-        sel_p = st.selectbox("製品を選択", opts, index=default_index)
+        
+        # 【新機能】品名の横に納期を表示するためのフォーマット関数
+        def format_normal_prod(p_name):
+            if not p_name: return ""
+            match = f_sch[f_sch['品名'] == p_name]
+            if not match.empty:
+                due = match.iloc[0].get(SCHEDULE_COL_DUE_DATE, "")
+                if pd.notna(due) and str(due).strip() != "":
+                    return f"{p_name} （📅 納期: {due}）"
+            return p_name
+
+        sel_p = st.selectbox("製品を選択", opts, index=default_index, format_func=format_normal_prod)
         
         man_in = st.checkbox("リストにない製品を手入力")
         man_p = st.text_input("新しい製品名")
@@ -1187,7 +1292,9 @@ def main_app():
                                 has_done_proc = True
                         
                         if has_done_proc:
+                            due_date_str = str(c_row.get(SCHEDULE_COL_DUE_DATE, ""))
                             done_calendars.append({
+                                "納期": due_date_str if due_date_str != "nan" else "",
                                 "カレンダー品名": prod_name,
                                 "断裁": statuses["断裁"],
                                 "丁合": statuses["丁合"],
@@ -1217,7 +1324,18 @@ def main_app():
                         sel_c = st.selectbox("得意先名で絞り込み", ["すべての得意先"] + c_names, key="cal_customer_sel")
                         
                         f_cal_sch = cal_sch[cal_sch['得意先名'] == sel_c] if sel_c != "すべての得意先" else cal_sch
-                        p_prod = st.selectbox("カレンダーの品名を選択", [""] + sorted(f_cal_sch['品名'].dropna().unique().tolist()))
+                        
+                        # 【新機能】カレンダー品名の横に納期を表示するフォーマット関数
+                        def format_cal_prod(p_name):
+                            if not p_name: return ""
+                            match = f_cal_sch[f_cal_sch['品名'] == p_name]
+                            if not match.empty:
+                                due = match.iloc[0].get(SCHEDULE_COL_DUE_DATE, "")
+                                if pd.notna(due) and str(due).strip() != "":
+                                    return f"{p_name} （📅 納期: {due}）"
+                            return p_name
+
+                        p_prod = st.selectbox("カレンダーの品名を選択", [""] + sorted(f_cal_sch['品名'].dropna().unique().tolist()), format_func=format_cal_prod)
                         
                         if p_prod:
                             parent_row = cal_sch[cal_sch['品名']==p_prod].iloc[0]
@@ -1262,7 +1380,7 @@ def main_app():
                             except: p_qty = 0
                             
                             if p_qty > 0:
-                                p_name = parent_row.get('品名', '')
+                                p_name = parent_row.get('品名', '') # ここを品名に変更
                                 parent_label = f"{p_name}（親元分）" if pd.notna(p_name) and p_name else "親元（基本）分"
                                 if parent_label in target_items:
                                     target_items[parent_label]['数量'] += p_qty
@@ -1370,17 +1488,31 @@ def main_app():
             with c_right:
                 st.markdown("<h3>カレンダー進行中一覧</h3>", unsafe_allow_html=True)
                 cal_d_df = in_progress_df.copy()
-                if not cal_d_df.empty and 'is_calendar' in cal_d_df.columns:
-                    cal_d_df = cal_d_df[cal_d_df['is_calendar'] == True]
-                else:
-                    cal_d_df = pd.DataFrame() 
+                is_cal_mask = pd.Series(False, index=cal_d_df.index) if not cal_d_df.empty else pd.Series(dtype=bool)
+                if not cal_d_df.empty:
+                    if 'is_calendar' in cal_d_df.columns:
+                        is_cal_mask = is_cal_mask | (cal_d_df['is_calendar'] == True)
+                    if '製品名' in cal_d_df.columns and not sch.empty and '品名' in sch.columns and SCHEDULE_COL_DETAILS in sch.columns:
+                        sch['clean_品名'] = sch['品名'].apply(clean_text)
+                        cal_sch_mask = sch[SCHEDULE_COL_DETAILS].astype(str).str.contains('カレンダー', na=False)
+                        cal_prods = set(sch[cal_sch_mask]['clean_品名'].tolist())
+                        cal_d_df['clean_製品名'] = cal_d_df['製品名'].apply(clean_text)
+                        is_cal_mask = is_cal_mask | cal_d_df['clean_製品名'].isin(cal_prods)
+                    cal_d_df = cal_d_df[is_cal_mask]
                     
                 if cal_d_df.empty: 
                     st.info("作業中のカレンダーはありません。")
                 else:
+                    schedule_lookup_cal = {}
+                    if not sch.empty and '品名' in sch.columns:
+                        sch['clean_品名_lookup'] = sch['品名'].apply(clean_text)
+                        for _, row in sch.iterrows():
+                            schedule_lookup_cal[row['clean_品名_lookup']] = row.get(SCHEDULE_COL_DUE_DATE, "")
+
                     for p, g in cal_d_df.groupby('製品名'):
-                        # 【修正】デフォルトで閉じた状態に変更
-                        with st.expander(f"**{p}**", expanded=False):
+                        due_date_cal = schedule_lookup_cal.get(clean_text(p), "")
+                        due_badge_cal = f" 📅 納期:{due_date_cal}" if pd.notna(due_date_cal) and str(due_date_cal).strip() != "" else ""
+                        with st.expander(f"**{p}**{due_badge_cal}", expanded=False):
                             c_btn = st.button("親ごと完了", key=f"c_cal_{p}", type="primary")
                             if c_btn: handle_product_completion(p, view_key='cal_sub_view')
                             for _, r in g.iterrows():
