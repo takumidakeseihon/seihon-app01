@@ -295,7 +295,7 @@ def process_form(is_edit_mode=False, default_data=None, view_key='sub_view', is_
         try: return datetime.strptime(t_str, '%H:%M').time() if t_str else None
         except: return None
         
-    with st.form(key='process_form'):
+    with st.container():
         user_loc = st.session_state.get('user_location', "未設定")
         detail_val = default_data.get('詳細', '')
         st_time_obj = to_time_obj(default_data.get('開始時間'))
@@ -454,9 +454,9 @@ def process_form(is_edit_mode=False, default_data=None, view_key='sub_view', is_
         rmks = st.text_area("備考", value=default_data.get('備考', ''))
         
         cb1, cb2, cb3 = st.columns([1.2, 1.2, 2])
-        btn_sub = cb1.form_submit_button("更新する" if is_edit_mode else "作業中として追加", type="primary" if is_edit_mode else "secondary", use_container_width=True)
-        btn_com = None if is_edit_mode else cb2.form_submit_button("この内容で最終完了", type="primary", use_container_width=True)
-        if cb3.form_submit_button("キャンセル"):
+        btn_sub = cb1.button("更新する" if is_edit_mode else "作業中として追加", type="primary" if is_edit_mode else "secondary", use_container_width=True)
+        btn_com = None if is_edit_mode else cb2.button("この内容で最終完了", type="primary", use_container_width=True)
+        if cb3.button("キャンセル"):
             st.session_state[view_key] = 'SELECT_PROCESS' if view_key == 'sub_view' else 'SELECT'
             st.session_state.pop('record_to_copy', None)
             st.session_state.pop('cal_record_to_copy', None)
@@ -1292,7 +1292,9 @@ def main_app():
                                 has_done_proc = True
                         
                         if has_done_proc:
+                            due_date_str = str(c_row.get(SCHEDULE_COL_DUE_DATE, ""))
                             done_calendars.append({
+                                "納期": due_date_str if due_date_str != "nan" else "",
                                 "カレンダー品名": prod_name,
                                 "断裁": statuses["断裁"],
                                 "丁合": statuses["丁合"],
@@ -1486,17 +1488,31 @@ def main_app():
             with c_right:
                 st.markdown("<h3>カレンダー進行中一覧</h3>", unsafe_allow_html=True)
                 cal_d_df = in_progress_df.copy()
-                if not cal_d_df.empty and 'is_calendar' in cal_d_df.columns:
-                    cal_d_df = cal_d_df[cal_d_df['is_calendar'] == True]
-                else:
-                    cal_d_df = pd.DataFrame() 
+                is_cal_mask = pd.Series(False, index=cal_d_df.index) if not cal_d_df.empty else pd.Series(dtype=bool)
+                if not cal_d_df.empty:
+                    if 'is_calendar' in cal_d_df.columns:
+                        is_cal_mask = is_cal_mask | (cal_d_df['is_calendar'] == True)
+                    if '製品名' in cal_d_df.columns and not sch.empty and '品名' in sch.columns and SCHEDULE_COL_DETAILS in sch.columns:
+                        sch['clean_品名'] = sch['品名'].apply(clean_text)
+                        cal_sch_mask = sch[SCHEDULE_COL_DETAILS].astype(str).str.contains('カレンダー', na=False)
+                        cal_prods = set(sch[cal_sch_mask]['clean_品名'].tolist())
+                        cal_d_df['clean_製品名'] = cal_d_df['製品名'].apply(clean_text)
+                        is_cal_mask = is_cal_mask | cal_d_df['clean_製品名'].isin(cal_prods)
+                    cal_d_df = cal_d_df[is_cal_mask]
                     
                 if cal_d_df.empty: 
                     st.info("作業中のカレンダーはありません。")
                 else:
+                    schedule_lookup_cal = {}
+                    if not sch.empty and '品名' in sch.columns:
+                        sch['clean_品名_lookup'] = sch['品名'].apply(clean_text)
+                        for _, row in sch.iterrows():
+                            schedule_lookup_cal[row['clean_品名_lookup']] = row.get(SCHEDULE_COL_DUE_DATE, "")
+
                     for p, g in cal_d_df.groupby('製品名'):
-                        # 【修正】デフォルトで閉じた状態に変更
-                        with st.expander(f"**{p}**", expanded=False):
+                        due_date_cal = schedule_lookup_cal.get(clean_text(p), "")
+                        due_badge_cal = f" 📅 納期:{due_date_cal}" if pd.notna(due_date_cal) and str(due_date_cal).strip() != "" else ""
+                        with st.expander(f"**{p}**{due_badge_cal}", expanded=False):
                             c_btn = st.button("親ごと完了", key=f"c_cal_{p}", type="primary")
                             if c_btn: handle_product_completion(p, view_key='cal_sub_view')
                             for _, r in g.iterrows():
