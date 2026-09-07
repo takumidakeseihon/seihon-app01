@@ -366,20 +366,54 @@ def process_form(is_edit_mode=False, default_data=None, view_key='sub_view', is_
             fin_dtl = str(st.number_input("ページ数／枚数", min_value=0, step=1, value=d_pgs))
             st_o = st.time_input(st_label, step=600, value=st_time_obj, disabled=is_setup_only)
             en_o = st.time_input("終了時間", step=600, value=en_time_obj, disabled=is_setup_only)
-        elif process_name == "梱包":
-            d_pt, d_ip, d_bc = "", 0, 0
-            if is_edit_mode and detail_val:
-                dtls = detail_val.split(" | ")
-                d_pt = dtls[0] if dtls else ""
-                for i in dtls[1:]:
-                    if "個/包" in i: d_ip = int(i.replace("個/包", "").strip())
-                    elif "箱" in i: d_bc = int(i.replace("箱", "").strip())
+        elif process_name in ["梱包", "綴じ+梱包"]:
+            d_pt, d_ip, d_bc, d_btype, d_borigin = "", 0, 0, "", ""
+            preserved_details = []
+            if detail_val:
+                dtls = [x.strip() for x in detail_val.split(" | ")]
+                for i in dtls:
+                    if i in ["包装+箱", "包装のみ", "箱入れのみ", "結束"]: 
+                        d_pt = i
+                    elif "個/包" in i: 
+                        try: d_ip = int(i.replace("個/包", "").strip())
+                        except: preserved_details.append(i)
+                    elif i.endswith("箱") and "種類:" not in i and "手配:" not in i:
+                        try: d_bc = int(i.replace("箱", "").strip())
+                        except: preserved_details.append(i)
+                    elif "種類:" in i: 
+                        d_btype = i.replace("種類:", "").strip()
+                    elif "手配:" in i: 
+                        d_borigin = i.replace("手配:", "").strip()
+                    else:
+                        if i: preserved_details.append(i)
+            
+            d_other = st.text_input("会社名 / その他詳細", value=" | ".join(preserved_details), placeholder="例: 〇〇会社") if is_edit_mode or preserved_details else ""
+            
             pt = st.selectbox("作業内容", ["", "包装+箱", "包装のみ", "箱入れのみ", "結束"], index=["", "包装+箱", "包装のみ", "箱入れのみ", "結束"].index(d_pt) if d_pt in ["", "包装+箱", "包装のみ", "箱入れのみ", "結束"] else 0)
-            ip = st.number_input("一包みの入数", min_value=0, step=1, value=d_ip) if "包装" in pt or "結束" in pt else 0
-            bc = st.number_input("箱の数", min_value=0, step=1, value=d_bc) if "箱" in pt else 0
-            d_list = [pt]
+            
+            c_p1, c_p2 = st.columns(2)
+            with c_p1:
+                ip = st.number_input("一包みの入数（部/包）", min_value=0, step=1, value=d_ip) if "包装" in pt or "結束" in pt else 0
+            with c_p2:
+                bc = st.number_input("箱の数", min_value=0, step=1, value=d_bc) if "箱" in pt else 0
+            
+            box_type, box_origin = "", ""
+            if "箱" in pt:
+                c_b1, c_b2 = st.columns(2)
+                with c_b1:
+                    box_type = st.text_input("箱の種類（任意）", value=d_btype, placeholder="例: B2用段ボール")
+                with c_b2:
+                    origin_opts = ["", "支給箱", "自社手配箱"]
+                    d_borigin_safe = "支給箱" if "支給" in d_borigin else "自社手配箱" if "自社" in d_borigin else "" if not d_borigin else d_borigin
+                    box_origin = st.selectbox("箱の手配", origin_opts, index=origin_opts.index(d_borigin_safe) if d_borigin_safe in origin_opts else 0)
+
+            d_list = [d_other] if d_other else []
+            if pt: d_list.append(pt)
             if ip > 0: d_list.append(f"{ip}個/包")
             if bc > 0: d_list.append(f"{bc}箱")
+            if box_type: d_list.append(f"種類:{box_type}")
+            if box_origin: d_list.append(f"手配:{box_origin}")
+            
             fin_dtl = " | ".join(d for d in d_list if d)
             st_o = st.time_input("開始時間", step=600, value=st_time_obj, disabled=is_setup_only)
             en_o = st.time_input("終了時間", step=600, value=en_time_obj, disabled=is_setup_only)
@@ -424,7 +458,6 @@ def process_form(is_edit_mode=False, default_data=None, view_key='sub_view', is_
                 def op():
                     b = firestore.client().batch()
                     current_qty_sum = 0
-                    current_time_sum = 0
                     
                     for i, item in enumerate(bulk_items):
                         original_item_qty = int(item.get('出来数', 0))
@@ -443,18 +476,23 @@ def process_form(is_edit_mode=False, default_data=None, view_key='sub_view', is_
                         assigned_time = 0
                         if wm > 0:
                             if original_total_qty_bulk > 0:
-                                if i == len(bulk_items) - 1:
-                                    assigned_time = int(wm) - current_time_sum
-                                else:
-                                    assigned_time = int(wm * (original_item_qty / original_total_qty_bulk))
+                                assigned_time = int(wm * (original_item_qty / original_total_qty_bulk))
                             else:
                                 assigned_time = int(wm / len(bulk_items))
-                        current_time_sum += assigned_time
+
+                        # 会社名等の既存の詳細に、梱包等の入力情報（fin_dtl）を結合する
+                        final_item_detail = str(item.get('詳細', '')).strip()
+                        fin_dtl_str = str(fin_dtl).strip()
+                        if fin_dtl_str and fin_dtl_str not in ["", "0", "0.0"]:
+                            if final_item_detail:
+                                final_item_detail = f"{final_item_detail} | {fin_dtl_str}"
+                            else:
+                                final_item_detail = fin_dtl_str
 
                         f = base_f_data.copy()
                         f.update({
                             "記録ID": f"{datetime.now().strftime('%Y%m%d%H%M%S%f')}_{i}",
-                            "製品名": product_name, "詳細": item.get('詳細', ''), "作業時間_分": assigned_time, "出来数": item_qty
+                            "製品名": product_name, "詳細": final_item_detail, "作業時間_分": assigned_time, "出来数": item_qty
                         })
                         if status == "完了":
                             f['完了日時'] = firestore.SERVER_TIMESTAMP
@@ -1071,9 +1109,8 @@ def main_app():
                 if 'is_calendar' in d_df.columns:
                     d_df = d_df[d_df['is_calendar'] != True]
                 if '製品名' in d_df.columns and not schedule_df.empty and SCHEDULE_COL_DETAILS in schedule_df.columns:
-                    schedule_df['clean_品名_for_mask'] = schedule_df['品名'].apply(clean_text)
                     cal_sch_mask = schedule_df[SCHEDULE_COL_DETAILS].astype(str).str.contains('カレンダー', na=False)
-                    cal_prods_in_sch = set(schedule_df[cal_sch_mask]['clean_品名_for_mask'].tolist())
+                    cal_prods_in_sch = set(schedule_df[cal_sch_mask]['clean_品名'].tolist())
                     d_df['clean_製品名'] = d_df['製品名'].apply(clean_text)
                     d_df = d_df[~d_df['clean_製品名'].isin(cal_prods_in_sch)]
                 
