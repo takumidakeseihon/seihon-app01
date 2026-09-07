@@ -16,6 +16,7 @@ from PIL import Image
 
 st.set_page_config(page_title="製本記録アプリ", layout="wide")
 
+# CSSの定義
 st.markdown("""
 <style>
 input, textarea, select { font-size: 16px !important; }
@@ -300,7 +301,7 @@ def process_form(is_edit_mode=False, default_data=None, view_key='sub_view', is_
         
         if is_bulk:
             total_qty = sum(int(item.get('出来数', 0)) for item in bulk_items)
-            # 出来数を手動で編集可能に変更。デフォルトは各アイテムの合算値
+            # 出来数を手動で編集可能に変更。デフォルトは合算値
             qty = st.number_input("出来数（一括登録の合計）", min_value=0, value=int(total_qty))
             st.info("※手動で出来数を修正した場合、各会社の部数比率に応じて自動で按分されて記録されます。時間は部数に応じて按分されて記録されます。")
         else:
@@ -1255,20 +1256,23 @@ def main_app():
                                         else:
                                             target_items[content_val] = {'会社名': content_val, '数量': qty}
                             
+                            # 【親元分の自動追加処理】（引算せず無条件で合算する）
                             p_qty_raw = parent_row.get(SCHEDULE_COL_TOTAL_QUANTITY, 0)
                             try: p_qty = int(float(p_qty_raw)) if pd.notna(p_qty_raw) else 0
                             except: p_qty = 0
                             
                             if p_qty > 0:
-                                p_name = parent_row.get('得意先名', '')
+                                p_name = parent_row.get('品名', '')
                                 parent_label = f"{p_name}（親元分）" if pd.notna(p_name) and p_name else "親元（基本）分"
                                 if parent_label in target_items:
                                     target_items[parent_label]['数量'] += p_qty
                                 else:
                                     target_items[parent_label] = {'会社名': parent_label, '数量': p_qty}
                                     
+                            # ここで親と名入れを全て合算した真の総数を計算
                             true_total_qty = sum(item['数量'] for item in target_items.values())
                             
+                            # 【新機能】カレンダー進捗ダッシュボードの計算と表示
                             comp_df_all = load_from_firestore(db, "completed", days_limit=3000)
                             cal_prog = in_progress_df[in_progress_df['製品名'] == p_prod] if not in_progress_df.empty and '製品名' in in_progress_df.columns else pd.DataFrame()
                             cal_comp = comp_df_all[comp_df_all['製品名'] == p_prod] if not comp_df_all.empty and '製品名' in comp_df_all.columns else pd.DataFrame()
@@ -1366,22 +1370,16 @@ def main_app():
             with c_right:
                 st.markdown("<h3>カレンダー進行中一覧</h3>", unsafe_allow_html=True)
                 cal_d_df = in_progress_df.copy()
-                is_cal_mask = pd.Series(False, index=cal_d_df.index) if not cal_d_df.empty else pd.Series(dtype=bool)
-                if not cal_d_df.empty:
-                    if 'is_calendar' in cal_d_df.columns:
-                        is_cal_mask = is_cal_mask | (cal_d_df['is_calendar'] == True)
-                    if '製品名' in cal_d_df.columns and not sch.empty and '品名' in sch.columns and SCHEDULE_COL_DETAILS in sch.columns:
-                        sch['clean_品名'] = sch['品名'].apply(clean_text)
-                        cal_sch_mask = sch[SCHEDULE_COL_DETAILS].astype(str).str.contains('カレンダー', na=False)
-                        cal_prods = set(sch[cal_sch_mask]['clean_品名'].tolist())
-                        cal_d_df['clean_製品名'] = cal_d_df['製品名'].apply(clean_text)
-                        is_cal_mask = is_cal_mask | cal_d_df['clean_製品名'].isin(cal_prods)
-                    cal_d_df = cal_d_df[is_cal_mask]
+                if not cal_d_df.empty and 'is_calendar' in cal_d_df.columns:
+                    cal_d_df = cal_d_df[cal_d_df['is_calendar'] == True]
+                else:
+                    cal_d_df = pd.DataFrame() 
                     
                 if cal_d_df.empty: 
                     st.info("作業中のカレンダーはありません。")
                 else:
                     for p, g in cal_d_df.groupby('製品名'):
+                        # 【修正】デフォルトで閉じた状態に変更
                         with st.expander(f"**{p}**", expanded=False):
                             c_btn = st.button("親ごと完了", key=f"c_cal_{p}", type="primary")
                             if c_btn: handle_product_completion(p, view_key='cal_sub_view')
