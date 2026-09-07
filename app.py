@@ -389,23 +389,22 @@ def process_form(is_edit_mode=False, default_data=None, view_key='sub_view', is_
             
             d_other = st.text_input("会社名 / その他詳細", value=" | ".join(preserved_details), placeholder="例: 〇〇会社") if is_edit_mode or preserved_details else ""
             
-            pt = st.selectbox("作業内容", ["", "包装+箱", "包装のみ", "箱入れのみ", "結束"], index=["", "包装+箱", "包装のみ", "箱入れのみ", "結束"].index(d_pt) if d_pt in ["", "包装+箱", "包装のみ", "箱入れのみ", "結束"] else 0)
+            pt = st.selectbox("作業内容（大分類）", ["", "包装+箱", "包装のみ", "箱入れのみ", "結束"], index=["", "包装+箱", "包装のみ", "箱入れのみ", "結束"].index(d_pt) if d_pt in ["", "包装+箱", "包装のみ", "箱入れのみ", "結束"] else 0)
             
+            st.markdown("<span style='font-size:0.9rem; color:#555;'>▼ 以下は必要な項目のみ入力してください</span>", unsafe_allow_html=True)
             c_p1, c_p2 = st.columns(2)
             with c_p1:
-                ip = st.number_input("一包みの入数（部/包）", min_value=0, step=1, value=d_ip) if "包装" in pt or "結束" in pt else 0
+                ip = st.number_input("一包みの入数（部/包）", min_value=0, step=1, value=d_ip)
             with c_p2:
-                bc = st.number_input("箱の数", min_value=0, step=1, value=d_bc) if "箱" in pt else 0
+                bc = st.number_input("箱の数", min_value=0, step=1, value=d_bc)
             
-            box_type, box_origin = "", ""
-            if "箱" in pt:
-                c_b1, c_b2 = st.columns(2)
-                with c_b1:
-                    box_type = st.text_input("箱の種類（任意）", value=d_btype, placeholder="例: B2用段ボール")
-                with c_b2:
-                    origin_opts = ["", "支給箱", "自社手配箱"]
-                    d_borigin_safe = "支給箱" if "支給" in d_borigin else "自社手配箱" if "自社" in d_borigin else "" if not d_borigin else d_borigin
-                    box_origin = st.selectbox("箱の手配", origin_opts, index=origin_opts.index(d_borigin_safe) if d_borigin_safe in origin_opts else 0)
+            c_b1, c_b2 = st.columns(2)
+            with c_b1:
+                box_type = st.text_input("箱の種類（任意）", value=d_btype, placeholder="例: B2用段ボール")
+            with c_b2:
+                origin_opts = ["", "支給箱", "自社手配箱"]
+                d_borigin_safe = "支給箱" if "支給" in d_borigin else "自社手配箱" if "自社" in d_borigin else "" if not d_borigin else d_borigin
+                box_origin = st.selectbox("箱の手配", origin_opts, index=origin_opts.index(d_borigin_safe) if d_borigin_safe in origin_opts else 0)
 
             d_list = [d_other] if d_other else []
             if pt: d_list.append(pt)
@@ -458,6 +457,7 @@ def process_form(is_edit_mode=False, default_data=None, view_key='sub_view', is_
                 def op():
                     b = firestore.client().batch()
                     current_qty_sum = 0
+                    current_time_sum = 0
                     
                     for i, item in enumerate(bulk_items):
                         original_item_qty = int(item.get('出来数', 0))
@@ -476,9 +476,13 @@ def process_form(is_edit_mode=False, default_data=None, view_key='sub_view', is_
                         assigned_time = 0
                         if wm > 0:
                             if original_total_qty_bulk > 0:
-                                assigned_time = int(wm * (original_item_qty / original_total_qty_bulk))
+                                if i == len(bulk_items) - 1:
+                                    assigned_time = int(wm) - current_time_sum
+                                else:
+                                    assigned_time = int(wm * (original_item_qty / original_total_qty_bulk))
                             else:
                                 assigned_time = int(wm / len(bulk_items))
+                        current_time_sum += assigned_time
 
                         # 会社名等の既存の詳細に、梱包等の入力情報（fin_dtl）を結合する
                         final_item_detail = str(item.get('詳細', '')).strip()
@@ -1159,6 +1163,7 @@ def main_app():
                                 st.markdown('</div>', unsafe_allow_html=True)
                                 
                                 st.divider()
+                                
     elif main_view == "📅 カレンダー一括管理":
         in_progress_df = load_from_firestore(db, "in_progress")
         st.session_state.in_progress_df = in_progress_df
@@ -1457,10 +1462,6 @@ def main_app():
                                 if cz.button("削除", key=f"d_cal_{r['id']}", use_container_width=True): db.collection("in_progress").document(r['id']).delete(); load_from_firestore.clear(); st.rerun()
                                 st.markdown('</div>', unsafe_allow_html=True)
                                 st.divider()
-    elif main_view == "📝 日報（退勤報告）":
-        show_daily_report()
-    elif main_view == "👑 管理者画面":
-        show_admin_dashboard()
 
 st.markdown("<h1>📘 製本記録アプリ</h1>", unsafe_allow_html=True)
 if st.session_state.get('scroll_to_top'):
