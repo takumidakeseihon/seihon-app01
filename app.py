@@ -35,6 +35,18 @@ input, textarea, select { font-size: 16px !important; }
         padding: 0.25rem 0.5rem !important;
         font-size: 0.8rem !important;
         min-height: 0px !important;
+        white-space: nowrap !important;
+    }
+    h2, h3, h5 {
+        font-size: clamp(0.9rem, 4vw, 1.3rem) !important;
+    }
+    .stSelectbox label, .stTextInput label, .stNumberInput label {
+        font-size: 0.85rem !important;
+    }
+    /* 左右の余白を詰める */
+    .block-container {
+        padding-left: 1rem !important;
+        padding-right: 1rem !important;
     }
 }
 </style>
@@ -400,11 +412,30 @@ def process_form(is_edit_mode=False, default_data=None, view_key='sub_view', is_
             
             c_b1, c_b2 = st.columns(2)
             with c_b1:
-                box_type = st.text_input("箱の種類（任意）", value=d_btype, placeholder="例: B2用段ボール")
+                BOX_TYPES = ["", "小林印刷用箱", "B3（364）カレンダー", "A2カレンダー", "B3（380）カレンダー", "B2カレンダー", "その他（手入力）"]
+                d_btype_safe = d_btype if d_btype in BOX_TYPES else "その他（手入力）" if d_btype else ""
+                box_type_sel = st.selectbox("箱の種類", BOX_TYPES, index=BOX_TYPES.index(d_btype_safe))
+                if box_type_sel == "その他（手入力）":
+                    box_type = st.text_input("箱の種類を手入力", value=d_btype if d_btype not in BOX_TYPES else "", placeholder="例: B2用段ボール")
+                else:
+                    box_type = box_type_sel
+                    
             with c_b2:
+                BOX_ORIGIN_MAP = {
+                    "小林印刷用箱": "支給箱",
+                    "B3（364）カレンダー": "自社手配箱",
+                    "A2カレンダー": "自社手配箱",
+                    "B3（380）カレンダー": "自社手配箱",
+                    "B2カレンダー": "自社手配箱"
+                }
                 origin_opts = ["", "支給箱", "自社手配箱"]
                 d_borigin_safe = "支給箱" if "支給" in d_borigin else "自社手配箱" if "自社" in d_borigin else "" if not d_borigin else d_borigin
-                box_origin = st.selectbox("箱の手配", origin_opts, index=origin_opts.index(d_borigin_safe) if d_borigin_safe in origin_opts else 0)
+                
+                # 箱の種類に応じて手配を自動ロック
+                if box_type_sel in BOX_ORIGIN_MAP:
+                    box_origin = st.selectbox("箱の手配", origin_opts, index=origin_opts.index(BOX_ORIGIN_MAP[box_type_sel]), disabled=True)
+                else:
+                    box_origin = st.selectbox("箱の手配", origin_opts, index=origin_opts.index(d_borigin_safe) if d_borigin_safe in origin_opts else 0)
 
             d_list = [d_other] if d_other else []
             if pt: d_list.append(pt)
@@ -999,7 +1030,18 @@ def render_step1(schedule_df, display_df, selected_location, product_to_location
             opts.append(preselected_product)
         
         default_index = opts.index(preselected_product) if preselected_product in opts else 0
-        sel_p = st.selectbox("製品を選択", opts, index=default_index)
+        
+        # 【新機能】品名の横に納期を表示するためのフォーマット関数
+        def format_normal_prod(p_name):
+            if not p_name: return ""
+            match = f_sch[f_sch['品名'] == p_name]
+            if not match.empty:
+                due = match.iloc[0].get(SCHEDULE_COL_DUE_DATE, "")
+                if pd.notna(due) and str(due).strip() != "":
+                    return f"{p_name} （📅 納期: {due}）"
+            return p_name
+
+        sel_p = st.selectbox("製品を選択", opts, index=default_index, format_func=format_normal_prod)
         
         man_in = st.checkbox("リストにない製品を手入力")
         man_p = st.text_input("新しい製品名")
@@ -1163,7 +1205,6 @@ def main_app():
                                 st.markdown('</div>', unsafe_allow_html=True)
                                 
                                 st.divider()
-                                
     elif main_view == "📅 カレンダー一括管理":
         in_progress_df = load_from_firestore(db, "in_progress")
         st.session_state.in_progress_df = in_progress_df
@@ -1281,7 +1322,18 @@ def main_app():
                         sel_c = st.selectbox("得意先名で絞り込み", ["すべての得意先"] + c_names, key="cal_customer_sel")
                         
                         f_cal_sch = cal_sch[cal_sch['得意先名'] == sel_c] if sel_c != "すべての得意先" else cal_sch
-                        p_prod = st.selectbox("カレンダーの品名を選択", [""] + sorted(f_cal_sch['品名'].dropna().unique().tolist()))
+                        
+                        # 【新機能】カレンダー品名の横に納期を表示するフォーマット関数
+                        def format_cal_prod(p_name):
+                            if not p_name: return ""
+                            match = f_cal_sch[f_cal_sch['品名'] == p_name]
+                            if not match.empty:
+                                due = match.iloc[0].get(SCHEDULE_COL_DUE_DATE, "")
+                                if pd.notna(due) and str(due).strip() != "":
+                                    return f"{p_name} （📅 納期: {due}）"
+                            return p_name
+
+                        p_prod = st.selectbox("カレンダーの品名を選択", [""] + sorted(f_cal_sch['品名'].dropna().unique().tolist()), format_func=format_cal_prod)
                         
                         if p_prod:
                             parent_row = cal_sch[cal_sch['品名']==p_prod].iloc[0]
@@ -1320,23 +1372,27 @@ def main_app():
                                         else:
                                             target_items[content_val] = {'会社名': content_val, '数量': qty}
                             
+                            # 【親元分の自動追加処理】（引算せず無条件で合算する）
                             p_qty_raw = parent_row.get(SCHEDULE_COL_TOTAL_QUANTITY, 0)
                             try: p_qty = int(float(p_qty_raw)) if pd.notna(p_qty_raw) else 0
                             except: p_qty = 0
                             
                             if p_qty > 0:
-                                p_name = parent_row.get('品名', '')
+                                p_name = parent_row.get('品名', '') # ここを品名に変更
                                 parent_label = f"{p_name}（親元分）" if pd.notna(p_name) and p_name else "親元（基本）分"
                                 if parent_label in target_items:
                                     target_items[parent_label]['数量'] += p_qty
                                 else:
                                     target_items[parent_label] = {'会社名': parent_label, '数量': p_qty}
                                     
+                            # ここで親と名入れを全て合算した真の総数を計算
                             true_total_qty = sum(item['数量'] for item in target_items.values())
                             
+                            # 【新機能】カレンダー進捗ダッシュボードの計算と表示
                             comp_df_all = load_from_firestore(db, "completed", days_limit=3000)
                             cal_prog = in_progress_df[in_progress_df['製品名'] == p_prod] if not in_progress_df.empty and '製品名' in in_progress_df.columns else pd.DataFrame()
                             cal_comp = comp_df_all[comp_df_all['製品名'] == p_prod] if not comp_df_all.empty and '製品名' in comp_df_all.columns else pd.DataFrame()
+
                             st.markdown("##### 📈 全体進捗")
                             proc_cols = ["断裁", "丁合", "綴じ", "梱包"]
                             cols = st.columns(len(proc_cols))
@@ -1360,6 +1416,7 @@ def main_app():
                                 with cols[idx]:
                                     st.markdown(f"**{proc_name}**<br><span style='font-size:1.2rem;'>{status_icon}</span>", unsafe_allow_html=True)
                             st.divider()
+
                             if not target_items:
                                 st.markdown("### 🔘 単体で登録（名入れがない場合）")
                                 st.info("このカレンダーには名入れが見つかりません。単体として登録します。")
@@ -1429,22 +1486,16 @@ def main_app():
             with c_right:
                 st.markdown("<h3>カレンダー進行中一覧</h3>", unsafe_allow_html=True)
                 cal_d_df = in_progress_df.copy()
-                is_cal_mask = pd.Series(False, index=cal_d_df.index) if not cal_d_df.empty else pd.Series(dtype=bool)
-                if not cal_d_df.empty:
-                    if 'is_calendar' in cal_d_df.columns:
-                        is_cal_mask = is_cal_mask | (cal_d_df['is_calendar'] == True)
-                    if '製品名' in cal_d_df.columns and not sch.empty and '品名' in sch.columns and SCHEDULE_COL_DETAILS in sch.columns:
-                        sch['clean_品名'] = sch['品名'].apply(clean_text)
-                        cal_sch_mask = sch[SCHEDULE_COL_DETAILS].astype(str).str.contains('カレンダー', na=False)
-                        cal_prods = set(sch[cal_sch_mask]['clean_品名'].tolist())
-                        cal_d_df['clean_製品名'] = cal_d_df['製品名'].apply(clean_text)
-                        is_cal_mask = is_cal_mask | cal_d_df['clean_製品名'].isin(cal_prods)
-                    cal_d_df = cal_d_df[is_cal_mask]
+                if not cal_d_df.empty and 'is_calendar' in cal_d_df.columns:
+                    cal_d_df = cal_d_df[cal_d_df['is_calendar'] == True]
+                else:
+                    cal_d_df = pd.DataFrame() 
                     
                 if cal_d_df.empty: 
                     st.info("作業中のカレンダーはありません。")
                 else:
                     for p, g in cal_d_df.groupby('製品名'):
+                        # 【修正】デフォルトで閉じた状態に変更
                         with st.expander(f"**{p}**", expanded=False):
                             c_btn = st.button("親ごと完了", key=f"c_cal_{p}", type="primary")
                             if c_btn: handle_product_completion(p, view_key='cal_sub_view')
@@ -1462,6 +1513,10 @@ def main_app():
                                 if cz.button("削除", key=f"d_cal_{r['id']}", use_container_width=True): db.collection("in_progress").document(r['id']).delete(); load_from_firestore.clear(); st.rerun()
                                 st.markdown('</div>', unsafe_allow_html=True)
                                 st.divider()
+    elif main_view == "📝 日報（退勤報告）":
+        show_daily_report()
+    elif main_view == "👑 管理者画面":
+        show_admin_dashboard()
 
 st.markdown("<h1>📘 製本記録アプリ</h1>", unsafe_allow_html=True)
 if st.session_state.get('scroll_to_top'):
