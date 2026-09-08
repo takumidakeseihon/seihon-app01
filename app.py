@@ -555,14 +555,22 @@ def login_screen():
     cols = st.columns(4)
     for i, name in enumerate([n for n in WORKER_NAMES if n != "（自分の名前を選択してください）"]):
         if cols[i % 4].button(name, key=f"u_{name}", use_container_width=True):
-            st.session_state.just_logged_in, st.session_state.logged_in_user, st.session_state.user_location = True, name, WORKER_TO_LOCATION.get(name, "すべて")
+            st.session_state.just_logged_in = True
+            st.session_state.logged_in_user = name
+            st.session_state.user_location = WORKER_TO_LOCATION.get(name, "すべて")
+            
+            uid_val = WORKER_ID_MAP.get(name, "")
+            if hasattr(st, 'query_params'):
+                st.query_params["uid"] = uid_val
+            elif hasattr(st, 'experimental_set_query_params'):
+                st.experimental_set_query_params(uid=uid_val)
+                
             st.rerun()
 
 def show_bookmark_page(user_name):
     st.success(f"**{user_name}** さんとしてログインしました！")
     st.header("📌 ホーム画面への追加（重要）")
-    st.markdown(f'<a href="?uid={WORKER_ID_MAP.get(user_name, "")}" target="_blank" style="display: block; text-align: center; background-color: #3b82f6; color: white; padding: 15px; text-decoration: none; border-radius: 10px; font-weight: bold; margin-bottom: 20px;">👉 1. ここをタップして【新しいタブ】で開き直す</a>', unsafe_allow_html=True)
-    st.info("2. 新しい画面が開いたら、ブラウザのメニューから **「ホーム画面に追加」** を行ってください。")
+    st.info("iPhoneをご利用の場合、画面下の **シェアボタン（四角から上矢印が飛び出ているマーク）** から **「ホーム画面に追加」** を行ってください。\n\nこれにより、次回から自動的にログインした状態で開くことができます。")
     if st.button("すぐに記録を開始する", use_container_width=True):
         del st.session_state.just_logged_in
         st.rerun()
@@ -1197,7 +1205,7 @@ def main_app():
                                 
                                 st.markdown('<div class="button-container-row">', unsafe_allow_html=True)
                                 cx, cy, cz = st.columns([1, 1, 1])
-                                if cx.button("編集", key=f"e_{r['id']}", use_container_width=True): st.session_state.record_to_edit, st.session_state.sub_view = r.to_dict(), 'EDIT_FORM'; st.rerun()
+                                if cx.button("編集", key=f"e_{r['id']}", use_container_width=True): st.session_state.record_to_edit, st.session_state.sub_view = 'EDIT_FORM'; st.rerun()
                                 if cy.button("続き", key=f"cp_{r['id']}", use_container_width=True): 
                                     d = r.to_dict(); d['開始時間'] = d['終了時間'] = ""; d['出来数'] = 0; d.pop('id', None)
                                     st.session_state.record_to_copy, st.session_state.sub_view = d, 'INPUT_FORM'; st.rerun()
@@ -1541,9 +1549,18 @@ if st.session_state.get('scroll_to_top'):
 
 db = init_firebase()
 if not db: st.stop()
+
+# ログイン判定（URLパラメーターから取得）
 if 'logged_in_user' not in st.session_state:
-    if hasattr(st, 'query_params') and st.query_params.get("uid") in ID_TO_WORKER:
-        st.session_state.logged_in_user = ID_TO_WORKER[st.query_params.get("uid")]
+    uid = None
+    if hasattr(st, 'query_params'):
+        uid = st.query_params.get("uid")
+    elif hasattr(st, 'experimental_get_query_params'):
+        params = st.experimental_get_query_params()
+        uid = params.get("uid", [None])[0] if "uid" in params else None
+
+    if uid and uid in ID_TO_WORKER:
+        st.session_state.logged_in_user = ID_TO_WORKER[uid]
         st.session_state.user_location = WORKER_TO_LOCATION.get(st.session_state.logged_in_user, "すべて")
 
 if 'logged_in_user' in st.session_state:
