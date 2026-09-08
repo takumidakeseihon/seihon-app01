@@ -555,36 +555,21 @@ def login_screen():
     cols = st.columns(4)
     for i, name in enumerate([n for n in WORKER_NAMES if n != "（自分の名前を選択してください）"]):
         if cols[i % 4].button(name, key=f"u_{name}", use_container_width=True):
-            st.session_state.just_logged_in = True
-            st.session_state.logged_in_user = name
-            st.session_state.user_location = WORKER_TO_LOCATION.get(name, "すべて")
-            
             uid_val = WORKER_ID_MAP.get(name, "")
-            if hasattr(st, 'query_params'):
-                st.query_params["uid"] = uid_val
-            elif hasattr(st, 'experimental_set_query_params'):
-                st.experimental_set_query_params(uid=uid_val)
-                
+            st.session_state.trigger_login_redirect = uid_val
             st.rerun()
 
 def show_bookmark_page(user_name):
     st.success(f"**{user_name}** さんとしてログインしました！")
     st.header("📌 ホーム画面への追加（重要）")
     
-    uid_val = WORKER_ID_MAP.get(user_name, "")
+    st.warning("⚠️ 必ずこの画面のまま、ブラウザのメニューからホーム画面に追加してください。")
     
-    st.warning("⚠️ iPhoneをご利用の場合、そのまま追加すると次回またログイン画面に戻ってしまいます。必ず以下の手順を行ってください。")
-    
-    st.markdown(f"""
-    <a href="?uid={uid_val}" target="_self" style="display: block; text-align: center; background-color: #ef4444; color: white; padding: 15px; text-decoration: none; border-radius: 10px; font-weight: bold; margin-bottom: 20px; font-size: 1.1rem;">
-    👉 手順1. まず【ここ】をタップして画面を再読み込み
-    </a>
-    """, unsafe_allow_html=True)
-    
-    st.info("手順2. 画面がパチッと更新されたら、画面下の **シェアボタン（四角から上矢印のマーク）** から **「ホーム画面に追加」** を行ってください。\n\nこれにより次回から自動的にログイン状態になります。")
+    st.info("画面下の **シェアボタン（四角から上矢印のマーク）** から **「ホーム画面に追加」** を行ってください。\n\nこれにより次回から自動的にログイン状態になります。")
     
     if st.button("すでに設定した / または設定せずに開始する", use_container_width=True):
-        del st.session_state.just_logged_in
+        if 'just_logged_in' in st.session_state:
+            del st.session_state.just_logged_in
         st.rerun()
 
 def show_daily_report():
@@ -1082,11 +1067,7 @@ def main_app():
     
     st.sidebar.success(f"ログイン: **{st.session_state.logged_in_user}**")
     if st.sidebar.button("ログアウト"): 
-        st.session_state.clear()
-        if hasattr(st, 'query_params'):
-            st.query_params.clear()
-        elif hasattr(st, 'experimental_set_query_params'):
-            st.experimental_set_query_params()
+        st.session_state.trigger_logout = True
         st.rerun()
     st.sidebar.button("データ更新", on_click=lambda: (load_from_firestore.clear(), load_tasks_for_customer.clear()), use_container_width=True)
     
@@ -1568,18 +1549,48 @@ if st.session_state.get('scroll_to_top'):
 db = init_firebase()
 if not db: st.stop()
 
-# ログイン判定（URLパラメーターから取得）
+if st.session_state.get('trigger_logout'):
+    st.session_state.clear()
+    components.html("""
+        <script>
+            const url = new URL(window.parent.location.href);
+            url.search = '';
+            window.parent.location.href = url.toString();
+        </script>
+    """, height=0, width=0)
+    st.stop()
+
+if 'trigger_login_redirect' in st.session_state:
+    uid_val = st.session_state.pop('trigger_login_redirect')
+    components.html(f"""
+        <script>
+            const url = new URL(window.parent.location.href);
+            url.searchParams.set('uid', '{uid_val}');
+            url.searchParams.set('show_guide', '1');
+            window.parent.location.href = url.toString();
+        </script>
+    """, height=0, width=0)
+    st.stop()
+
 if 'logged_in_user' not in st.session_state:
     uid = None
+    show_guide = False
     if hasattr(st, 'query_params'):
         uid = st.query_params.get("uid")
+        if "show_guide" in st.query_params:
+            show_guide = True
+            del st.query_params["show_guide"]
     elif hasattr(st, 'experimental_get_query_params'):
         params = st.experimental_get_query_params()
         uid = params.get("uid", [None])[0] if "uid" in params else None
+        if "show_guide" in params:
+            show_guide = True
 
     if uid and uid in ID_TO_WORKER:
         st.session_state.logged_in_user = ID_TO_WORKER[uid]
         st.session_state.user_location = WORKER_TO_LOCATION.get(st.session_state.logged_in_user, "すべて")
+        if show_guide:
+            st.session_state.just_logged_in = True
 
 if 'logged_in_user' in st.session_state:
     if st.session_state.get("just_logged_in"): show_bookmark_page(st.session_state.logged_in_user)
