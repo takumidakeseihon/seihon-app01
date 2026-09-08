@@ -575,9 +575,10 @@ def show_bookmark_page(user_name):
     st.success(f"**{user_name}** さんとしてログインしました！")
     st.header("📌 ホーム画面への追加（重要）")
     
-    st.warning("⚠️ 必ずこの画面のまま、ブラウザのメニューからホーム画面に追加してください。")
+    uid_val = WORKER_ID_MAP.get(user_name, "")
+    st.markdown(f'<a href="?uid={uid_val}" target="_blank" style="display: block; text-align: center; background-color: #3b82f6; color: white; padding: 15px; text-decoration: none; border-radius: 10px; font-weight: bold; margin-bottom: 20px;">👉 1. ここをタップして【新しいタブ】で開き直す</a>', unsafe_allow_html=True)
     
-    st.info("画面下の **シェアボタン（四角から上矢印のマーク）** から **「ホーム画面に追加」** を行ってください。\n\nこれにより次回から自動的にログイン状態になります。")
+    st.info("2. 新しい画面が開いたら、画面下の **シェアボタン（四角から上矢印のマーク）** から **「ホーム画面に追加」** を行ってください。")
     
     if st.button("すでに設定した / または設定せずに開始する", use_container_width=True):
         if 'just_logged_in' in st.session_state:
