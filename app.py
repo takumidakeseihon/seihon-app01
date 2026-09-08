@@ -1081,7 +1081,13 @@ def main_app():
     if 'success_msg' in st.session_state: st.success(st.session_state.pop('success_msg'))
     
     st.sidebar.success(f"ログイン: **{st.session_state.logged_in_user}**")
-    if st.sidebar.button("ログアウト"): st.session_state.clear(); st.rerun()
+    if st.sidebar.button("ログアウト"): 
+        st.session_state.clear()
+        if hasattr(st, 'query_params'):
+            st.query_params.clear()
+        elif hasattr(st, 'experimental_set_query_params'):
+            st.experimental_set_query_params()
+        st.rerun()
     st.sidebar.button("データ更新", on_click=lambda: (load_from_firestore.clear(), load_tasks_for_customer.clear()), use_container_width=True)
     
     with st.sidebar.expander("🛠️ 管理者メニュー"):
