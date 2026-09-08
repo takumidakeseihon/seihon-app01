@@ -556,7 +556,19 @@ def login_screen():
     for i, name in enumerate([n for n in WORKER_NAMES if n != "（自分の名前を選択してください）"]):
         if cols[i % 4].button(name, key=f"u_{name}", use_container_width=True):
             uid_val = WORKER_ID_MAP.get(name, "")
-            st.session_state.trigger_login_redirect = uid_val
+            st.session_state.just_logged_in = True
+            st.session_state.logged_in_user = name
+            st.session_state.user_location = WORKER_TO_LOCATION.get(name, "すべて")
+            
+            # Streamlitの公式機能で安全にURLを書き換える
+            try:
+                st.query_params["uid"] = uid_val
+            except:
+                try:
+                    st.experimental_set_query_params(uid=uid_val)
+                except:
+                    pass
+                    
             st.rerun()
 
 def show_bookmark_page(user_name):
@@ -1036,7 +1048,7 @@ def render_step1(schedule_df, display_df, selected_location, product_to_location
         
         default_index = opts.index(preselected_product) if preselected_product in opts else 0
         
-        # 【新機能】品名の横に納期を表示するためのフォーマット関数
+        # 納期を品名に表示するフォーマット関数
         def format_normal_prod(p_name):
             if not p_name: return ""
             match = f_sch[f_sch['品名'] == p_name]
@@ -1067,7 +1079,15 @@ def main_app():
     
     st.sidebar.success(f"ログイン: **{st.session_state.logged_in_user}**")
     if st.sidebar.button("ログアウト"): 
-        st.session_state.trigger_logout = True
+        st.session_state.clear()
+        # ログアウト時にURLの情報を安全に消去する
+        try:
+            st.query_params.clear()
+        except:
+            try:
+                st.experimental_set_query_params()
+            except:
+                pass
         st.rerun()
     st.sidebar.button("データ更新", on_click=lambda: (load_from_firestore.clear(), load_tasks_for_customer.clear()), use_container_width=True)
     
@@ -1204,7 +1224,7 @@ def main_app():
                                 
                                 st.markdown('<div class="button-container-row">', unsafe_allow_html=True)
                                 cx, cy, cz = st.columns([1, 1, 1])
-                                if cx.button("編集", key=f"e_{r['id']}", use_container_width=True): st.session_state.record_to_edit, st.session_state.sub_view = 'EDIT_FORM'; st.rerun()
+                                if cx.button("編集", key=f"e_{r['id']}", use_container_width=True): st.session_state.record_to_edit, st.session_state.sub_view = r.to_dict(), 'EDIT_FORM'; st.rerun()
                                 if cy.button("続き", key=f"cp_{r['id']}", use_container_width=True): 
                                     d = r.to_dict(); d['開始時間'] = d['終了時間'] = ""; d['出来数'] = 0; d.pop('id', None)
                                     st.session_state.record_to_copy, st.session_state.sub_view = d, 'INPUT_FORM'; st.rerun()
@@ -1332,7 +1352,7 @@ def main_app():
                         
                         f_cal_sch = cal_sch[cal_sch['得意先名'] == sel_c] if sel_c != "すべての得意先" else cal_sch
                         
-                        # 【新機能】カレンダー品名の横に納期を表示するフォーマット関数
+                        # 納期付きで表示するフォーマット関数
                         def format_cal_prod(p_name):
                             if not p_name: return ""
                             match = f_cal_sch[f_cal_sch['品名'] == p_name]
@@ -1387,8 +1407,8 @@ def main_app():
                             except: p_qty = 0
                             
                             if p_qty > 0:
-                                p_name = parent_row.get('品名', '') # ここを品名に変更
-                                parent_label = f"{p_name}（親元分）" if pd.notna(p_name) and p_name else "親元（基本）分"
+                                p_name = parent_row.get('品名', '')
+                                parent_label = f"{p_name}（親元分）" if pd.notna(p_name) and p_name else "品名不明（親元分）"
                                 if parent_label in target_items:
                                     target_items[parent_label]['数量'] += p_qty
                                 else:
@@ -1397,7 +1417,6 @@ def main_app():
                             # ここで親と名入れを全て合算した真の総数を計算
                             true_total_qty = sum(item['数量'] for item in target_items.values())
                             
-                            # 【新機能】カレンダー進捗ダッシュボードの計算と表示
                             comp_df_all = load_from_firestore(db, "completed", days_limit=3000)
                             cal_prog = in_progress_df[in_progress_df['製品名'] == p_prod] if not in_progress_df.empty and '製品名' in in_progress_df.columns else pd.DataFrame()
                             cal_comp = comp_df_all[comp_df_all['製品名'] == p_prod] if not comp_df_all.empty and '製品名' in comp_df_all.columns else pd.DataFrame()
@@ -1549,51 +1568,24 @@ if st.session_state.get('scroll_to_top'):
 db = init_firebase()
 if not db: st.stop()
 
-if st.session_state.get('trigger_logout'):
-    st.session_state.clear()
-    components.html("""
-        <script>
-            const url = new URL(window.parent.location.href);
-            url.search = '';
-            window.parent.location.href = url.toString();
-        </script>
-    """, height=0, width=0)
-    st.stop()
-
-if 'trigger_login_redirect' in st.session_state:
-    uid_val = st.session_state.pop('trigger_login_redirect')
-    components.html(f"""
-        <script>
-            const url = new URL(window.parent.location.href);
-            url.searchParams.set('uid', '{uid_val}');
-            url.searchParams.set('show_guide', '1');
-            window.parent.location.href = url.toString();
-        </script>
-    """, height=0, width=0)
-    st.stop()
-
 if 'logged_in_user' not in st.session_state:
     uid = None
-    show_guide = False
-    if hasattr(st, 'query_params'):
+    try:
         uid = st.query_params.get("uid")
-        if "show_guide" in st.query_params:
-            show_guide = True
-            del st.query_params["show_guide"]
-    elif hasattr(st, 'experimental_get_query_params'):
-        params = st.experimental_get_query_params()
-        uid = params.get("uid", [None])[0] if "uid" in params else None
-        if "show_guide" in params:
-            show_guide = True
+    except:
+        try:
+            uid = st.experimental_get_query_params().get("uid", [None])[0]
+        except:
+            pass
 
     if uid and uid in ID_TO_WORKER:
         st.session_state.logged_in_user = ID_TO_WORKER[uid]
         st.session_state.user_location = WORKER_TO_LOCATION.get(st.session_state.logged_in_user, "すべて")
-        if show_guide:
-            st.session_state.just_logged_in = True
 
 if 'logged_in_user' in st.session_state:
-    if st.session_state.get("just_logged_in"): show_bookmark_page(st.session_state.logged_in_user)
-    else: main_app()
+    if st.session_state.get("just_logged_in"):
+        show_bookmark_page(st.session_state.logged_in_user)
+    else:
+        main_app()
 else:
     login_screen()
