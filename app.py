@@ -570,8 +570,20 @@ def login_screen():
 def show_bookmark_page(user_name):
     st.success(f"**{user_name}** さんとしてログインしました！")
     st.header("📌 ホーム画面への追加（重要）")
-    st.info("iPhoneをご利用の場合、画面下の **シェアボタン（四角から上矢印が飛び出ているマーク）** から **「ホーム画面に追加」** を行ってください。\n\nこれにより、次回から自動的にログインした状態で開くことができます。")
-    if st.button("すぐに記録を開始する", use_container_width=True):
+    
+    uid_val = WORKER_ID_MAP.get(user_name, "")
+    
+    st.warning("⚠️ iPhoneをご利用の場合、そのまま追加すると次回またログイン画面に戻ってしまいます。必ず以下の手順を行ってください。")
+    
+    st.markdown(f"""
+    <a href="?uid={uid_val}" target="_self" style="display: block; text-align: center; background-color: #ef4444; color: white; padding: 15px; text-decoration: none; border-radius: 10px; font-weight: bold; margin-bottom: 20px; font-size: 1.1rem;">
+    👉 手順1. まず【ここ】をタップして画面を再読み込み
+    </a>
+    """, unsafe_allow_html=True)
+    
+    st.info("手順2. 画面がパチッと更新されたら、画面下の **シェアボタン（四角から上矢印のマーク）** から **「ホーム画面に追加」** を行ってください。\n\nこれにより次回から自動的にログイン状態になります。")
+    
+    if st.button("すでに設定した / または設定せずに開始する", use_container_width=True):
         del st.session_state.just_logged_in
         st.rerun()
 
